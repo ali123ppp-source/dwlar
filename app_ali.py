@@ -20,12 +20,30 @@ st.set_page_config(page_title=f"نظام الوكيل - {AUTHORIZED_AGENT_NAME}"
 st.markdown("""
     <style>
     th, td { text-align: right !important; dir: rtl !important; }
-    div.stButton > button { 
-        background-color: var(--primary-color); color: white; width: 100%; font-weight: bold; border-radius: 8px; border: none; height: 45px;
+    
+    /* 🔵 تعديل الأزرار لتصبح باللون الأزرق الغامق والواضح جداً على الهواتف */
+    div.stButton > button, div.stDownloadButton > button { 
+        background-color: #005C99 !important; 
+        color: #ffffff !important; 
+        width: 100%; 
+        font-weight: bold !important; 
+        font-size: 16px !important;
+        border-radius: 8px !important; 
+        border: none !important; 
+        height: 52px !important; /* زيادة الارتفاع ليكون واضحاً وسهل النقر في الموبايل */
+        box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.2) !important; /* إضافة ظل ليبرز الزر عن الخلفية */
+        transition: 0.3s ease;
     }
+    
+    /* تأثير عند تمرير الماوس أو الضغط على الزر */
+    div.stButton > button:hover, div.stDownloadButton > button:hover {
+        background-color: #004473 !important;
+        box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1) !important;
+    }
+
     .report-box { 
         background-color: var(--secondary-background-color); color: var(--text-color); padding: 15px; border-radius: 8px; 
-        border-right: 5px solid var(--primary-color); text-align: right; margin-bottom: 15px; box-shadow: 0px 2px 5px rgba(0,0,0,0.05);
+        border-right: 5px solid #005C99; text-align: right; margin-bottom: 15px; box-shadow: 0px 2px 5px rgba(0,0,0,0.05);
     }
     .report-box h4 { color: var(--text-color); margin: 5px 0; }
     </style>
@@ -145,7 +163,8 @@ with tab1:
     with col1: new_file = st.file_uploader("الملف الجديد (docx)", key="n_f")
     with col2: old_file = st.file_uploader("الملف القديم (docx)", key="o_f")
 
-    if st.button("تشغيل الفحص السحابي"):
+    # 🚀 هذا هو الزر الرئيسي وأصبح الآن أزرقاً كبيراً وواضحاً جداً
+    if st.button("🚀 تشغيل الفحص السحابي وبدء المقارنة"):
         if old_file and new_file:
             # ⛔ القفل الذكي لاسم الملف
             if AUTHORIZED_AGENT_NAME not in old_file.name or AUTHORIZED_AGENT_NAME not in new_file.name:
@@ -157,7 +176,6 @@ with tab1:
                     results, counters = compare_records(old_data, new_data)
                     
                     if results:
-                        # تخرين النتائج داخل الذاكرة المستمرة للمتصفح لحمايتها من الاختفاء
                         df_results = pd.DataFrame(results)[["التسلسل", "رقم البطاقة", "الاسم (سابقاً)", "الاسم (حالياً)", "الكلية (سابقاً)", "الكلية (حالياً)", "المستحقة (سابقاً)", "المستحقة (حالياً)", "المحجوبين (سابقاً)", "المحجوبين (حالياً)"]]
                         st.session_state['c_results'] = df_results
                         st.session_state['c_counters'] = counters
@@ -171,7 +189,7 @@ with tab1:
             st.warning("يرجى رفع الملفات أولاً.")
 
     # -----------------------------------------------------------------------------
-    # 🌟 عرض واستمرار جدول النتائج (حتى لو تفاعل المستخدم مع الفلاتر)
+    # 🌟 عرض واستمرار جدول النتائج
     # -----------------------------------------------------------------------------
     if st.session_state.get('show_table', False) and 'c_results' in st.session_state:
         df_res = st.session_state['c_results']
@@ -183,7 +201,7 @@ with tab1:
         with c2: st.markdown(f"<div class='report-box'>🔹 حركة المستحقة<br><h4>{cnt['eligible_fam']} عائلة</h4>الصافي: {cnt['net_eligible']:+d}</div>", unsafe_allow_html=True)
         with c3: st.markdown(f"<div class='report-box'>🔹 الحالات<br><h4>مضاف: {cnt['added_fam']} | محذوف: {cnt['deleted_fam']}</h4></div>", unsafe_allow_html=True)
         
-        # 💾 زر ترحيل النتائج للأرشيف (جوجل شيت)
+        # 💾 زر حفظ النتائج في جوجل شيت (أزرق أيضاً)
         if st.button("💾 ترحيل وحفظ هذه العملية في الأرشيف"):
             with st.spinner("جاري الترحيل..."):
                 try:
@@ -205,7 +223,7 @@ with tab1:
                 except Exception as ex:
                     st.error(f"فشل الاتصال بالأرشيف: {ex}")
 
-        # 🎛️ نظام الفلاتر الذكي والمستقر
+        # 🎛️ نظام الفلاتر
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("<h5 style='text-align: right;'>🎛️ تصفية وعرض فئات معينة من الجدول:</h5>", unsafe_allow_html=True)
         
@@ -216,7 +234,6 @@ with tab1:
             label_visibility="collapsed"
         )
         
-        # تصفية البيانات بدون مساس بالأصل المخرن في السيسشن
         df_filtered = df_res.copy()
         if filter_option == "✨ المضافين فقط":
             df_filtered = df_filtered[df_filtered["الاسم (سابقاً)"].str.contains("مضاف", na=False)]
@@ -225,13 +242,12 @@ with tab1:
         elif filter_option == "🔄 تعديلات الأفراد فقط":
             df_filtered = df_filtered[~df_filtered["الاسم (سابقاً)"].str.contains("مضاف", na=False) & ~df_filtered["الاسم (حالياً)"].str.contains("❌|محذوف", na=False)]
             
-        # عرض الجدول المفلتر
         st.dataframe(df_filtered, use_container_width=True, hide_index=True)
         
-        # تحميل الجدول الحالي
         report_title = f"تقرير ({filter_option.split()[0]}) - {st.session_state['c_filename']}"
         word_report = create_word_table_report(df_filtered, report_title)
         
+        # زر تحميل الورد (أزرق واضح ومتناسق مع التصميم)
         st.download_button(
             label=f"📥 تحميل هذا الجدول المفلتر كتقرير رسمي (Word)",
             data=word_report,
