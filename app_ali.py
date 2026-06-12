@@ -8,20 +8,34 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 from streamlit_gsheets import GSheetsConnection
 
 # =============================================================================
-# 🔐 قفل البرنامج (تغيير اسم الوكيل هنا لكل نسخة تبيعها)
+# 🔐 إعدادات الهوية وقفل البرنامج (تغيير اسم الوكيل ورابط الأيقونة هنا)
 # =============================================================================
 AUTHORIZED_AGENT_NAME = "علي صباح حسن"
 
-# -----------------------------------------------------------------------------
-# 1. إعدادات النظام والمظهر
-# -----------------------------------------------------------------------------
-st.set_page_config(page_title=f"نظام الوكيل - {AUTHORIZED_AGENT_NAME}", layout="wide", initial_sidebar_state="collapsed")
+# 🖼️ رابط أيقونة التطبيق (يمكنك وضع رابط شعار مكتبك أو شركتك هنا لتظهر على شاشة الهاتف)
+# حالياً وضعت لك أيقونة زرقاء احترافية تدل على مستندات وفحص ذكي
+APP_LOGO_URL = "https://cdn-icons-png.flaticon.com/512/5606/5606132.png" 
 
-st.markdown("""
+# -----------------------------------------------------------------------------
+# 1. إعدادات النظام والمظهر والأيقونات للهاتف
+# -----------------------------------------------------------------------------
+st.set_page_config(
+    page_title=f"نظام الوكيل - {AUTHORIZED_AGENT_NAME}", 
+    page_icon=APP_LOGO_URL, # أيقونة المتصفح
+    layout="wide", 
+    initial_sidebar_state="collapsed"
+)
+
+# حقن الأيقونة لتظهر عند التثبيت على شاشة الآيفون والأندرويد وتعديل الألوان
+st.markdown(f"""
+    <head>
+        <link rel="apple-touch-icon" href="{APP_LOGO_URL}">
+        <link rel="icon" type="image/png" href="{APP_LOGO_URL}">
+    </head>
     <style>
     th, td { text-align: right !important; dir: rtl !important; }
     
-    /* 🔵 تعديل الأزرار لتصبح باللون الأزرق الغامق والواضح جداً على الهواتف */
+    /* 🔵 أزرار زرقاء ملكية واضحة جداً للهواتف */
     div.stButton > button, div.stDownloadButton > button { 
         background-color: #005C99 !important; 
         color: #ffffff !important; 
@@ -30,12 +44,11 @@ st.markdown("""
         font-size: 16px !important;
         border-radius: 8px !important; 
         border: none !important; 
-        height: 52px !important; /* زيادة الارتفاع ليكون واضحاً وسهل النقر في الموبايل */
-        box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.2) !important; /* إضافة ظل ليبرز الزر عن الخلفية */
+        height: 52px !important; 
+        box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.2) !important; 
         transition: 0.3s ease;
     }
     
-    /* تأثير عند تمرير الماوس أو الضغط على الزر */
     div.stButton > button:hover, div.stDownloadButton > button:hover {
         background-color: #004473 !important;
         box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1) !important;
@@ -163,10 +176,9 @@ with tab1:
     with col1: new_file = st.file_uploader("الملف الجديد (docx)", key="n_f")
     with col2: old_file = st.file_uploader("الملف القديم (docx)", key="o_f")
 
-    # 🚀 هذا هو الزر الرئيسي وأصبح الآن أزرقاً كبيراً وواضحاً جداً
+    # 🚀 الزر الأزرق الرئيسي للفحص الفوري
     if st.button("🚀 تشغيل الفحص السحابي وبدء المقارنة"):
         if old_file and new_file:
-            # ⛔ القفل الذكي لاسم الملف
             if AUTHORIZED_AGENT_NAME not in old_file.name or AUTHORIZED_AGENT_NAME not in new_file.name:
                 st.error(f"❌ عذراً! هذه النسخة مقفلة ومخصصة حصراً لملفات الوكيل ({AUTHORIZED_AGENT_NAME}). تأكد من أن اسم الوكيل مكتوب بوضوح في اسم الملف المرفوع.")
             else:
@@ -201,7 +213,6 @@ with tab1:
         with c2: st.markdown(f"<div class='report-box'>🔹 حركة المستحقة<br><h4>{cnt['eligible_fam']} عائلة</h4>الصافي: {cnt['net_eligible']:+d}</div>", unsafe_allow_html=True)
         with c3: st.markdown(f"<div class='report-box'>🔹 الحالات<br><h4>مضاف: {cnt['added_fam']} | محذوف: {cnt['deleted_fam']}</h4></div>", unsafe_allow_html=True)
         
-        # 💾 زر حفظ النتائج في جوجل شيت (أزرق أيضاً)
         if st.button("💾 ترحيل وحفظ هذه العملية في الأرشيف"):
             with st.spinner("جاري الترحيل..."):
                 try:
@@ -223,7 +234,6 @@ with tab1:
                 except Exception as ex:
                     st.error(f"فشل الاتصال بالأرشيف: {ex}")
 
-        # 🎛️ نظام الفلاتر
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("<h5 style='text-align: right;'>🎛️ تصفية وعرض فئات معينة من الجدول:</h5>", unsafe_allow_html=True)
         
@@ -247,7 +257,6 @@ with tab1:
         report_title = f"تقرير ({filter_option.split()[0]}) - {st.session_state['c_filename']}"
         word_report = create_word_table_report(df_filtered, report_title)
         
-        # زر تحميل الورد (أزرق واضح ومتناسق مع التصميم)
         st.download_button(
             label=f"📥 تحميل هذا الجدول المفلتر كتقرير رسمي (Word)",
             data=word_report,
