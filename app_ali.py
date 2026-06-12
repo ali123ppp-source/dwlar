@@ -6,7 +6,7 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from streamlit_gsheets import GSheetsConnection
-from xhtml2pdf import pisa  # المكتبة الاحترافية لإنتاج ملف PDF حقيقي ومباشر للهاتف
+from fpdf import FPDF  # استخدام المكتبة الرسمية المدمجة لضمان عمل الـ PDF سحابياً بدون أخطاء
 
 # =============================================================================
 # 🔐 إعدادات الهوية وقفل البرنامج (تغيير اسم الوكيل ورابط الأيقونة هنا)
@@ -29,12 +29,12 @@ st.set_page_config(
 # حقن الأيقونة لتظهر كأيقونة تطبيق رسمي عند التثبيت على شاشة الآيفون والأندرويد
 st.markdown(f'<link rel="apple-touch-icon" href="{APP_LOGO_URL}"><link rel="icon" type="image/png" href="{APP_LOGO_URL}">', unsafe_allow_html=True)
 
-# الـ CSS المتقدم والآمن لتصميم أزرار زرقاء ملكية واضحة جداً للهواتف والأجهزة الذكية
+# الـ CSS المتقدم وتنسيق الأزرار الزرقاء الملكية للهواتف
 st.markdown("""
     <style>
     th, td { text-align: right !important; direction: rtl !important; }
     
-    /* 🔵 أزرار زرقاء ملكية بارزة وواضحة جداً وتصميم مريح للنقر بالهاتف */
+    /* 🔵 أزرار زرقاء ملكية بارزة ومواصفات نقر مريحة للهواتف */
     div.stButton > button, div.stDownloadButton > button { 
         background-color: #005C99 !important; 
         color: #ffffff !important; 
@@ -164,38 +164,49 @@ def create_word_table_report(df, title):
     buffer.seek(0)
     return buffer
 
-# 📄 توليد ملف الـ PDF الاحترافي المباشر باللغة العربية والخطوط الهندسية الواضحة للأرقام والأسماء
+# 📄 دالة توليد الـ PDF الاحترافية المستقرة سحابياً دون الحاجة لتثبيت أي خط خارجي
 def create_pdf_file_report(df, title, agent_name):
-    html_table = df.to_html(index=False)
-    html_content = f"""
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <style>
-            @import url('https://fonts.googleapis.com/css2?family=Amiri&display=swap');
-            @page {{ size: a4 landscape; margin: 1cm; }}
-            body {{ font-family: 'Amiri', serif; direction: rtl; text-align: right; color: #333; }}
-            .header {{ text-align: center; margin-bottom: 20px; border-bottom: 2px solid #005C99; padding-bottom: 10px; }}
-            .header h1 {{ color: #005C99; font-size: 22px; margin: 0; }}
-            .header p {{ font-size: 12px; color: #555; margin: 4px 0; }}
-            table {{ width: 100%; border-collapse: collapse; margin-top: 10px; direction: rtl; }}
-            th, td {{ border: 1px solid #999; padding: 6px; text-align: center; font-size: 11px; }}
-            th {{ background-color: #005C99; color: white; }}
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <h1>{title}</h1>
-            <p>الوكيل المعتمد: {agent_name} | تاريخ الاستخراج: {datetime.now().strftime("%Y-%m-%d %H:%M")}</p>
-        </div>
-        {html_table}
-    </body>
-    </html>
-    """
-    pdf_buffer = BytesIO()
-    pisa.CreatePDF(BytesIO(html_content.encode("utf-8")), pdf_buffer)
-    pdf_buffer.seek(0)
-    return pdf_buffer
+    pdf = FPDF(orientation="L", unit="mm", format="A4")
+    pdf.add_page()
+    
+    # تفعيل ترميز النصوص لضمان قراءة الأرقام والرموز الممزوجة
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 10, txt=f"Report Summary", ln=True, align="C")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 8, txt=f"Agent: {agent_name} | Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=True, align="C")
+    pdf.cell(0, 5, txt="-"*110, ln=True, align="C")
+    pdf.ln(5)
+    
+    # بناء أعمدة الجدول
+    columns = list(df.columns)
+    col_width = pdf.epw / len(columns)
+    
+    # كتابة الهيدر
+    pdf.set_font("Helvetica", "B", 10)
+    for col in columns:
+        # استبدال النصوص العربية برموز إنجليزية بسيطة في الهيدر لمنع تشوه الأحرف في المحركات الأساسية سحابياً
+        col_txt = col.replace("التسلسل", "Seq").replace("رقم البطاقة", "Card ID").replace("الاسم (حالياً)", "Current Name").replace("الاسم (سابقاً)", "Old Name")
+        if "الكلية" in col_txt: col_txt = "Total"
+        if "المستحقة" in col_txt: col_txt = "Eligible"
+        if "المحجوبين" in col_txt: col_txt = "Withheld"
+        pdf.cell(col_width, 8, txt=col_txt, border=1, align="C")
+    pdf.ln()
+    
+    # كتابة البيانات والأرقام والأسماء
+    pdf.set_font("Helvetica", "", 9)
+    for _, row in df.iterrows():
+        for col in columns:
+            val = str(row[col])
+            # فلترة الأسماء الإرشادية لضمان قراءتها بوضوح داخل مستند الـ PDF
+            if "مضاف" in val: val = "[+] Added"
+            elif "محذوف" in val: val = "[-] Deleted"
+            pdf.cell(col_width, 7, txt=val, border=1, align="C")
+        pdf.ln()
+        
+    pdf_output = BytesIO()
+    pdf.output(pdf_output)
+    pdf_output.seek(0)
+    return pdf_output
 
 # -----------------------------------------------------------------------------
 # 4. واجهة التطبيق الرئيسية 
@@ -286,7 +297,7 @@ with tab1:
             
         st.dataframe(df_filtered, use_container_width=True, hide_index=True)
         
-        report_title = f"تقرير المتغيرات ({filter_option.split()[0]})"
+        report_title = f"Report_{filter_option.split()[0]}"
         
         # أزرار التحميل المباشرة والاحترافية بجانب بعضهما البعض
         btn_col1, btn_col2 = st.columns(2)
@@ -301,8 +312,8 @@ with tab1:
             )
             
         with btn_col2:
-            # 📁 توليد وتحميل ملف PDF حقيقي ومباشر إلى ذاكرة الهاتف بشكل فوري
-            pdf_report = create_pdf_file_report(df_filtered, f"{report_title} - {st.session_state['c_filename']}", AUTHORIZED_AGENT_NAME)
+            # 📁 توليد وتحميل ملف PDF حقيقي ومباشر فورياً وثابتاً سحابياً
+            pdf_report = create_pdf_file_report(df_filtered, report_title, AUTHORIZED_AGENT_NAME)
             st.download_button(
                 label="📄 تحميل الجدول الحالي كملف (PDF) مباشر",
                 data=pdf_report,
