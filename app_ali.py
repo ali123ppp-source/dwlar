@@ -6,14 +6,14 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from streamlit_gsheets import GSheetsConnection
+from xhtml2pdf import pisa  # المكتبة الاحترافية لإنتاج ملف PDF حقيقي ومباشر للهاتف
 
 # =============================================================================
 # 🔐 إعدادات الهوية وقفل البرنامج (تغيير اسم الوكيل ورابط الأيقونة هنا)
 # =============================================================================
 AUTHORIZED_AGENT_NAME = "علي صباح حسن"
 
-# 🖼️ رابط أيقونة التطبيق (يمكنك وضع رابط شعار مكتبك أو شركتك هنا لتظهر على شاشة الهاتف)
-# حالياً وضعت لك أيقونة زرقاء احترافية تدل على مستندات وفحص ذكي
+# 🖼️ رابط أيقونة التطبيق لشاشة الهاتف (تظهر عند الحفظ والتثبيت على شاشة الهاتف الرئيسية)
 APP_LOGO_URL = "https://cdn-icons-png.flaticon.com/512/5606/5606132.png" 
 
 # -----------------------------------------------------------------------------
@@ -21,21 +21,20 @@ APP_LOGO_URL = "https://cdn-icons-png.flaticon.com/512/5606/5606132.png"
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title=f"نظام الوكيل - {AUTHORIZED_AGENT_NAME}", 
-    page_icon=APP_LOGO_URL, # أيقونة المتصفح
+    page_icon=APP_LOGO_URL, 
     layout="wide", 
     initial_sidebar_state="collapsed"
 )
 
-# حقن الأيقونة لتظهر عند التثبيت على شاشة الآيفون والأندرويد وتعديل الألوان
-st.markdown(f"""
-    <head>
-        <link rel="apple-touch-icon" href="{APP_LOGO_URL}">
-        <link rel="icon" type="image/png" href="{APP_LOGO_URL}">
-    </head>
+# حقن الأيقونة لتظهر كأيقونة تطبيق رسمي عند التثبيت على شاشة الآيفون والأندرويد
+st.markdown(f'<link rel="apple-touch-icon" href="{APP_LOGO_URL}"><link rel="icon" type="image/png" href="{APP_LOGO_URL}">', unsafe_allow_html=True)
+
+# الـ CSS المتقدم والآمن لتصميم أزرار زرقاء ملكية واضحة جداً للهواتف والأجهزة الذكية
+st.markdown("""
     <style>
-    th, td { text-align: right !important; dir: rtl !important; }
+    th, td { text-align: right !important; direction: rtl !important; }
     
-    /* 🔵 أزرار زرقاء ملكية واضحة جداً للهواتف */
+    /* 🔵 أزرار زرقاء ملكية بارزة وواضحة جداً وتصميم مريح للنقر بالهاتف */
     div.stButton > button, div.stDownloadButton > button { 
         background-color: #005C99 !important; 
         color: #ffffff !important; 
@@ -47,6 +46,7 @@ st.markdown(f"""
         height: 52px !important; 
         box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.2) !important; 
         transition: 0.3s ease;
+        margin-bottom: 10px;
     }
     
     div.stButton > button:hover, div.stDownloadButton > button:hover {
@@ -71,7 +71,7 @@ except Exception as e:
     st.error("تنبيه: لم يتم ضبط إعدادات الاتصال بجوجل شيت بعد.")
 
 # -----------------------------------------------------------------------------
-# 3. محرك المعالجة والمقارنة
+# 3. محرك المعالجة والمقارنة ووظائف التقارير
 # -----------------------------------------------------------------------------
 def extract_clean_records(file_obj):
     doc = Document(file_obj)
@@ -164,6 +164,39 @@ def create_word_table_report(df, title):
     buffer.seek(0)
     return buffer
 
+# 📄 توليد ملف الـ PDF الاحترافي المباشر باللغة العربية والخطوط الهندسية الواضحة للأرقام والأسماء
+def create_pdf_file_report(df, title, agent_name):
+    html_table = df.to_html(index=False)
+    html_content = f"""
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Amiri&display=swap');
+            @page {{ size: a4 landscape; margin: 1cm; }}
+            body {{ font-family: 'Amiri', serif; direction: rtl; text-align: right; color: #333; }}
+            .header {{ text-align: center; margin-bottom: 20px; border-bottom: 2px solid #005C99; padding-bottom: 10px; }}
+            .header h1 {{ color: #005C99; font-size: 22px; margin: 0; }}
+            .header p {{ font-size: 12px; color: #555; margin: 4px 0; }}
+            table {{ width: 100%; border-collapse: collapse; margin-top: 10px; direction: rtl; }}
+            th, td {{ border: 1px solid #999; padding: 6px; text-align: center; font-size: 11px; }}
+            th {{ background-color: #005C99; color: white; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>{title}</h1>
+            <p>الوكيل المعتمد: {agent_name} | تاريخ الاستخراج: {datetime.now().strftime("%Y-%m-%d %H:%M")}</p>
+        </div>
+        {html_table}
+    </body>
+    </html>
+    """
+    pdf_buffer = BytesIO()
+    pisa.CreatePDF(BytesIO(html_content.encode("utf-8")), pdf_buffer)
+    pdf_buffer.seek(0)
+    return pdf_buffer
+
 # -----------------------------------------------------------------------------
 # 4. واجهة التطبيق الرئيسية 
 # -----------------------------------------------------------------------------
@@ -176,7 +209,6 @@ with tab1:
     with col1: new_file = st.file_uploader("الملف الجديد (docx)", key="n_f")
     with col2: old_file = st.file_uploader("الملف القديم (docx)", key="o_f")
 
-    # 🚀 الزر الأزرق الرئيسي للفحص الفوري
     if st.button("🚀 تشغيل الفحص السحابي وبدء المقارنة"):
         if old_file and new_file:
             if AUTHORIZED_AGENT_NAME not in old_file.name or AUTHORIZED_AGENT_NAME not in new_file.name:
@@ -201,7 +233,7 @@ with tab1:
             st.warning("يرجى رفع الملفات أولاً.")
 
     # -----------------------------------------------------------------------------
-    # 🌟 عرض واستمرار جدول النتائج
+    # 🌟 عرض واستمرار جدول النتائج في الجلسة الحالية
     # -----------------------------------------------------------------------------
     if st.session_state.get('show_table', False) and 'c_results' in st.session_state:
         df_res = st.session_state['c_results']
@@ -254,15 +286,29 @@ with tab1:
             
         st.dataframe(df_filtered, use_container_width=True, hide_index=True)
         
-        report_title = f"تقرير ({filter_option.split()[0]}) - {st.session_state['c_filename']}"
-        word_report = create_word_table_report(df_filtered, report_title)
+        report_title = f"تقرير المتغيرات ({filter_option.split()[0]})"
         
-        st.download_button(
-            label=f"📥 تحميل هذا الجدول المفلتر كتقرير رسمي (Word)",
-            data=word_report,
-            file_name=f"تقرير_{filter_option.split()[0]}_{st.session_state['c_filename']}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        )
+        # أزرار التحميل المباشرة والاحترافية بجانب بعضهما البعض
+        btn_col1, btn_col2 = st.columns(2)
+        
+        with btn_col1:
+            word_report = create_word_table_report(df_filtered, f"{report_title} - {st.session_state['c_filename']}")
+            st.download_button(
+                label="📥 تحميل الجدول الحالي كتقرير (Word)",
+                data=word_report,
+                file_name=f"تقرير_{filter_option.split()[0]}_{st.session_state['c_filename']}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            
+        with btn_col2:
+            # 📁 توليد وتحميل ملف PDF حقيقي ومباشر إلى ذاكرة الهاتف بشكل فوري
+            pdf_report = create_pdf_file_report(df_filtered, f"{report_title} - {st.session_state['c_filename']}", AUTHORIZED_AGENT_NAME)
+            st.download_button(
+                label="📄 تحميل الجدول الحالي كملف (PDF) مباشر",
+                data=pdf_report,
+                file_name=f"تقرير_{filter_option.split()[0]}_{st.session_state['c_filename']}.pdf",
+                mime="application/pdf",
+            )
 
 with tab2:
     st.markdown("<h3 style='text-align: right;'>📜 العمليات المؤرشفة</h3>", unsafe_allow_html=True)
