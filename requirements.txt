@@ -3,3 +3,5 @@ pandas
 python-docx
 st-gsheets-connection
 pdfplumber
+arabic-reshaper
+python-bidi
