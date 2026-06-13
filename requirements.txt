@@ -2,5 +2,4 @@ streamlit
 pandas
 python-docx
 st-gsheets-connection
-requests
-PyJWT
+pyilovepdf
