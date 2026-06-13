@@ -32,56 +32,78 @@ except Exception:
     pass
 
 # -----------------------------------------------------------------------------
-# 3. محركات المعالجة (قراءة البيانات من PDF و Word مباشرة وبدون تحويل)
+# 3. محركات المعالجة الذكية (قراءة البيانات من PDF و Word مباشرة)
 # -----------------------------------------------------------------------------
 def fix_arabic_text(text):
-    """دالة لعدل الحروف العربية المقلوبة من الـ PDF"""
+    """دالة لتعديل الحروف العربية المقلوبة لتظهر بشكل سليم"""
     if not text:
         return text
-    # التحقق مما إذا كان النص يحتوي على حروف عربية
-    if any('\u0600' <= char <= '\u06FF' for char in text):
-        # شبك الحروف
+    if any('\u0600' <= char <= '\u06FF' or '\uFE70' <= char <= '\uFEFF' or '\uFB50' <= char <= '\uFDFF' for char in text):
         reshaped_text = arabic_reshaper.reshape(text)
-        # تعديل اتجاه القراءة
         return get_display(reshaped_text)
     return text
 
-def parse_row(cells):
-    """دالة تحليل ذكية لاستخراج البيانات من الصفوف"""
-    if not any(cells) or "المركز" in "".join(cells) or "الوكيل" in "".join(cells) or "اسم رب" in "".join(cells): 
+def parse_row(cells, is_pdf=False):
+    """دالة تحليل ذكية تفهم ترتيب الأعمدة العشوائي في الـ PDF والوورد"""
+    clean_cells = [str(c).strip().replace('\n', ' ') if c is not None else "" for c in cells]
+    joined = "".join(clean_cells)
+    
+    # تجاهل العناوين والصفوف الفارغة
+    if not any(clean_cells) or "المركز" in joined or "الوكيل" in joined or "اسم" in joined or "زكرمل" in joined: 
         return {}
         
     name_idx = -1
     max_len = 0
-    for i, c in enumerate(cells):
-        if any('\u0600' <= char <= '\u06FF' for char in c) and not any(char.isdigit() for char in c):
+    # 1. البحث عن عمود الاسم
+    for i, c in enumerate(clean_cells):
+        if any('\u0600' <= char <= '\u06FF' or '\uFE70' <= char <= '\uFEFF' or '\uFB50' <= char <= '\uFDFF' for char in c) and not any(char.isdigit() for char in c):
             if len(c) > max_len: 
                 max_len = len(c)
                 name_idx = i
                 
     if name_idx == -1: return {}
     
-    card_indices = [i for i, c in enumerate(cells) if c.isdigit() and len(c) >= 5]
-    if not card_indices: return {}
+    # تعديل الاسم العربي المقلوب فقط بعد التعرف عليه
+    raw_name = clean_cells[name_idx]
+    final_name = fix_arabic_text(raw_name) if is_pdf else raw_name
+
+    # 2. البحث عن رقم البطاقة (رقم طويل يتكون من 5 خانات أو أكثر)
+    card_num = "-"
+    card_cands = [c for c in clean_cells if c.isdigit() and len(c) >= 5]
+    if card_cands:
+        card_num = card_cands[0]
+    else:
+        return {}
+
+    # 3. استخراج الأرقام الصغيرة (الكلية، المستحقة، المحجوبين، والتسلسل)
+    # الأرقام قبل الاسم
+    small_before = [int(clean_cells[i]) for i in range(name_idx) if clean_cells[i].isdigit() and len(clean_cells[i]) < 5]
+    # الأرقام بعد الاسم
+    small_after = [int(clean_cells[i]) for i in range(name_idx + 1, len(clean_cells)) if clean_cells[i].isdigit() and len(clean_cells[i]) < 5]
     
-    card_num = cells[card_indices[1]] if len(card_indices) >= 2 else cells[card_indices[0]]
     seq = "-"
+    total = eligible = withheld = 0
     
-    for i in range(len(cells)-1, card_indices[-1], -1):
-        if cells[i].isdigit(): 
-            seq = cells[i]
-            break
-            
-    digit_cells = [int(cells[i]) for i in range(name_idx) if cells[i].isdigit()]
-    
-    if len(digit_cells) >= 3: 
-        withheld, eligible, total = digit_cells[0], digit_cells[1], digit_cells[2]
-    elif len(digit_cells) == 2: 
-        withheld, eligible, total = 0, digit_cells[0], digit_cells[1]
-    else: 
+    # 4. توزيع الأرقام بناءً على ترتيب الأعمدة (يسار ليمين أو يمين ليسار)
+    if len(small_before) >= 2:
+        # ترتيب الـ PDF غالباً
+        if len(small_before) >= 3:
+            withheld, eligible, total = small_before[-3], small_before[-2], small_before[-1]
+        else:
+            withheld, eligible, total = 0, small_before[-2], small_before[-1]
+        seq = small_after[0] if small_after else "-"
+        
+    elif len(small_after) >= 2:
+        # ترتيب الوورد غالباً
+        if len(small_after) >= 3:
+            total, eligible, withheld = small_after[0], small_after[1], small_after[2]
+        else:
+            total, eligible, withheld = small_after[0], small_after[1], 0
+        seq = small_before[0] if small_before else "-"
+    else:
         return {}
         
-    return {card_num: {"seq": seq, "name": cells[name_idx], "total": total, "eligible": eligible, "withheld": withheld}}
+    return {card_num: {"seq": seq, "name": final_name, "total": total, "eligible": eligible, "withheld": withheld}}
 
 def extract_clean_records(file_obj, is_pdf=False):
     """قراءة الجداول مباشرة من الملفات"""
@@ -92,19 +114,14 @@ def extract_clean_records(file_obj, is_pdf=False):
                 tables = page.extract_tables()
                 for table in tables:
                     for row in table:
-                        # تنظيف الخانات وتعديل اللغة العربية فوراً
-                        cells = []
-                        for c in row:
-                            raw_text = str(c).strip().replace('\n', ' ') if c is not None else ""
-                            cells.append(fix_arabic_text(raw_text))
-                        records.update(parse_row(cells))
+                        # تمرير الصف خام بدون تغيير
+                        records.update(parse_row(row, is_pdf=True))
     else:
-        # الوورد يقرأ العربية بشكل طبيعي ولا يحتاج لتعديل
         doc = Document(file_obj)
         for table in doc.tables:
             for row in table.rows:
                 cells = [cell.text.strip().replace('\n', ' ') for cell in row.cells]
-                records.update(parse_row(cells))
+                records.update(parse_row(cells, is_pdf=False))
     return records
 
 def compare_records(old_data, new_data):
