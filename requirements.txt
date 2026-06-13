@@ -2,4 +2,4 @@ streamlit
 pandas
 python-docx
 st-gsheets-connection
-pdfplumber
+pdf2docx
