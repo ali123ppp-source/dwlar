@@ -24,7 +24,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. إنشاء الاتصال بجوجل شيت ومفتاح iLovePDF
+# 2. إنشاء الاتصال بجوجل شيت 
 # -----------------------------------------------------------------------------
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
@@ -35,19 +35,25 @@ except Exception:
 # 3. محركات المعالجة والتحويل (PDF -> Word -> Data)
 # -----------------------------------------------------------------------------
 def convert_pdf_to_word_in_memory(pdf_bytes, filename):
-    """دالة الاتصال المباشر بخوادم iLovePDF بدون استخدام مكتبات خارجية معقدة"""
-    public_key = st.secrets.get("ILOVEPDF_PUBLIC_KEY", "")
+    """دالة الاتصال المباشر بخوادم iLovePDF (مزودة بكاشف أخطاء دقيق)"""
+    public_key = st.secrets.get("ILOVEPDF_PUBLIC_KEY", "").strip() # strip لإزالة أي مسافات بالخطأ
     if not public_key:
-        raise Exception("مفتاح iLovePDF غير متوفر في إعدادات Secrets.")
+        raise Exception("مفتاح iLovePDF غير متوفر في إعدادات Secrets. تأكد من إضافته.")
     
     try:
         # 1. المصادقة للحصول على تصريح الدخول (Token)
         auth_res = requests.post("https://api.ilovepdf.com/v1/auth", data={"public_key": public_key}).json()
+        if "token" not in auth_res:
+            raise Exception(f"فشل المصادقة. رد السيرفر: {auth_res}. (تأكد أن المفتاح يبدأ بـ project_public)")
+            
         token = auth_res.get("token")
         headers = {"Authorization": f"Bearer {token}"}
         
         # 2. بدء مهمة تحويل جديدة
         start_res = requests.get("https://api.ilovepdf.com/v1/start/pdfword", headers=headers).json()
+        if "server" not in start_res:
+            raise Exception(f"سيرفر iLovePDF يرفض العمل. رد السيرفر: {start_res}")
+            
         server = start_res.get("server")
         task_id = start_res.get("task")
         
@@ -55,6 +61,9 @@ def convert_pdf_to_word_in_memory(pdf_bytes, filename):
         upload_url = f"https://{server}/v1/upload"
         files = {"file": (filename, pdf_bytes, "application/pdf")}
         upload_res = requests.post(upload_url, headers=headers, data={"task": task_id}, files=files).json()
+        if "server_filename" not in upload_res:
+             raise Exception(f"فشل رفع الملف للسيرفر. رد السيرفر: {upload_res}")
+             
         server_filename = upload_res.get("server_filename")
         
         # 4. إعطاء أمر التحويل
@@ -65,17 +74,20 @@ def convert_pdf_to_word_in_memory(pdf_bytes, filename):
             "files[0][server_filename]": server_filename,
             "files[0][filename]": filename
         }
-        requests.post(process_url, headers=headers, data=process_data)
+        process_res = requests.post(process_url, headers=headers, data=process_data).json()
         
         # 5. تحميل الملف الجاهز إلى نظامك
         download_url = f"https://{server}/v1/download/{task_id}"
         download_res = requests.get(download_url, headers=headers)
         
+        if download_res.status_code != 200:
+             raise Exception("فشل تحميل الملف الوورد الجاهز من سيرفراتهم.")
+             
         output_docx_name = filename.rsplit('.', 1)[0] + ".docx"
         return BytesIO(download_res.content), output_docx_name
         
     except Exception as e:
-        raise Exception(f"فشل الاتصال المباشر بـ iLovePDF: {e}")
+        raise Exception(f"الخطأ: {e}")
 
 def extract_clean_records(file_obj):
     doc = Document(file_obj)
