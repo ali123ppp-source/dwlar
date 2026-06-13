@@ -5,8 +5,7 @@ from io import BytesIO
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 import pdfplumber
-import arabic_reshaper
-from bidi.algorithm import get_display
+import unicodedata
 from streamlit_gsheets import GSheetsConnection
 
 # -----------------------------------------------------------------------------
@@ -35,12 +34,29 @@ except Exception:
 # 3. محركات المعالجة الذكية (قراءة البيانات من PDF و Word مباشرة)
 # -----------------------------------------------------------------------------
 def fix_arabic_text(text):
-    """دالة لتعديل الحروف العربية المقلوبة لتظهر بشكل سليم"""
+    """خوارزمية ذكية لقلب الحروف وإعادتها لطبيعتها بدون مكتبات خارجية معقدة"""
     if not text:
         return text
-    if any('\u0600' <= char <= '\u06FF' or '\uFE70' <= char <= '\uFEFF' or '\uFB50' <= char <= '\uFDFF' for char in text):
-        reshaped_text = arabic_reshaper.reshape(text)
-        return get_display(reshaped_text)
+        
+    # 1. تنظيف النص من أي أشكال ملتصقة أو رموز PDF معقدة وإعادتها لحروف عربية صافية
+    text = unicodedata.normalize('NFKC', text)
+    
+    # 2. فحص ما إذا كان النص يحتوي على حروف عربية (لأن الـ PDF يقرأها بالمقلوب)
+    if any('\u0600' <= char <= '\u06FF' for char in text):
+        words = text.split() # تقسيم الاسم إلى كلمات
+        fixed_words = []
+        
+        for word in words:
+            # إذا كانت الكلمة عربية، نقلبها (مثلاً: ديمح -> حميد)
+            if any('\u0600' <= char <= '\u06FF' for char in word):
+                fixed_words.append(word[::-1])
+            else:
+                # الأرقام أو الكلمات الأجنبية تبقى كما هي
+                fixed_words.append(word)
+                
+        # إعادة تجميع الكلمات بترتيب عكسي لتصحيح مسار الجملة بالكامل
+        return " ".join(fixed_words[::-1])
+        
     return text
 
 def parse_row(cells, is_pdf=False):
@@ -56,14 +72,14 @@ def parse_row(cells, is_pdf=False):
     max_len = 0
     # 1. البحث عن عمود الاسم
     for i, c in enumerate(clean_cells):
-        if any('\u0600' <= char <= '\u06FF' or '\uFE70' <= char <= '\uFEFF' or '\uFB50' <= char <= '\uFDFF' for char in c) and not any(char.isdigit() for char in c):
+        if any('\u0600' <= char <= '\u06FF' for char in c) and not any(char.isdigit() for char in c):
             if len(c) > max_len: 
                 max_len = len(c)
                 name_idx = i
                 
     if name_idx == -1: return {}
     
-    # تعديل الاسم العربي المقلوب فقط بعد التعرف عليه
+    # تعديل الاسم العربي المقلوب
     raw_name = clean_cells[name_idx]
     final_name = fix_arabic_text(raw_name) if is_pdf else raw_name
 
@@ -76,17 +92,14 @@ def parse_row(cells, is_pdf=False):
         return {}
 
     # 3. استخراج الأرقام الصغيرة (الكلية، المستحقة، المحجوبين، والتسلسل)
-    # الأرقام قبل الاسم
     small_before = [int(clean_cells[i]) for i in range(name_idx) if clean_cells[i].isdigit() and len(clean_cells[i]) < 5]
-    # الأرقام بعد الاسم
     small_after = [int(clean_cells[i]) for i in range(name_idx + 1, len(clean_cells)) if clean_cells[i].isdigit() and len(clean_cells[i]) < 5]
     
     seq = "-"
     total = eligible = withheld = 0
     
-    # 4. توزيع الأرقام بناءً على ترتيب الأعمدة (يسار ليمين أو يمين ليسار)
+    # 4. توزيع الأرقام بناءً على ترتيب الأعمدة
     if len(small_before) >= 2:
-        # ترتيب الـ PDF غالباً
         if len(small_before) >= 3:
             withheld, eligible, total = small_before[-3], small_before[-2], small_before[-1]
         else:
@@ -94,7 +107,6 @@ def parse_row(cells, is_pdf=False):
         seq = small_after[0] if small_after else "-"
         
     elif len(small_after) >= 2:
-        # ترتيب الوورد غالباً
         if len(small_after) >= 3:
             total, eligible, withheld = small_after[0], small_after[1], small_after[2]
         else:
@@ -114,7 +126,6 @@ def extract_clean_records(file_obj, is_pdf=False):
                 tables = page.extract_tables()
                 for table in tables:
                     for row in table:
-                        # تمرير الصف خام بدون تغيير
                         records.update(parse_row(row, is_pdf=True))
     else:
         doc = Document(file_obj)
@@ -178,15 +189,12 @@ with tab1:
         if old_file and new_file:
             with st.spinner('جاري قراءة البيانات ومطابقتها...'):
                 try:
-                    # قراءة الملف القديم
                     is_old_pdf = old_file.name.lower().endswith('.pdf')
                     old_data = extract_clean_records(old_file, is_pdf=is_old_pdf)
                     
-                    # قراءة الملف الجديد
                     is_new_pdf = new_file.name.lower().endswith('.pdf')
                     new_data = extract_clean_records(new_file, is_pdf=is_new_pdf)
 
-                    # المطابقة المباشرة
                     results, counters = compare_records(old_data, new_data)
                     
                     if results:
@@ -201,7 +209,6 @@ with tab1:
                     st.error(f"حدث خطأ أثناء قراءة الملفات: {e}")
         else: st.warning("يرجى رفع الملفات أولاً.")
 
-    # عرض النتائج
     if 'c_results' in st.session_state:
         df_res = st.session_state['c_results']
         cnt = st.session_state['c_counters']
@@ -212,7 +219,6 @@ with tab1:
         with c2: st.markdown(f"<div class='report-box'>🔹 حركة المستحقة<br><h4>{cnt['eligible_fam']} عائلة</h4>الصافي: {cnt['net_eligible']:+d}</div>", unsafe_allow_html=True)
         with c3: st.markdown(f"<div class='report-box'>🔹 الحالات<br><h4>مضاف: {cnt['added_fam']} | محذوف: {cnt['deleted_fam']}</h4></div>", unsafe_allow_html=True)
         
-        # 💾 زر حفظ النتائج في جوجل شيت
         if st.button("💾 ترحيل وحفظ هذه العملية في أرشيف جوجل شيت السحابي"):
             with st.spinner("جاري الترحيل للسحابة..."):
                 try:
