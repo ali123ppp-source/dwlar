@@ -18,7 +18,6 @@ st.markdown("""
     <style>
     th, td { text-align: right !important; dir: rtl !important; }
     div.stButton > button { background-color: var(--primary-color); color: white; width: 100%; font-weight: bold; border-radius: 8px; border: none; height: 45px; }
-    div[data-testid="stFormSubmitButton"] > button { background-color: #005C99 !important; color: #ffffff !important; border-radius: 8px !important; font-weight: bold !important; border: none !important; width: 100%; height: 45px; }
     .report-box { background-color: var(--secondary-background-color); color: var(--text-color); padding: 15px; border-radius: 8px; border-right: 5px solid var(--primary-color); text-align: right; margin-bottom: 15px; box-shadow: 0px 2px 5px rgba(0,0,0,0.05); }
     .report-box h4 { color: var(--text-color); margin: 5px 0; }
     </style>
@@ -31,8 +30,6 @@ try:
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception:
     pass
-
-USER_CREDENTIALS = {"agent_hillah": "pass1234", "agent_baghdad": "baghdad2026", "admin": "master_root_99"}
 
 # -----------------------------------------------------------------------------
 # 3. محركات المعالجة والتحويل (PDF -> Word -> Data)
@@ -144,38 +141,15 @@ def create_word_table_report(df, title):
     return buffer
 
 # -----------------------------------------------------------------------------
-# 4. بوابة تسجيل الدخول
+# 4. واجهة التطبيق الرئيسية (تبويبات)
 # -----------------------------------------------------------------------------
-if 'logged_in' not in st.session_state: 
-    st.session_state['logged_in'] = False
-
-if not st.session_state['logged_in']:
-    st.subheader("🔐 تسجيل الدخول للنظام السحابي")
-    with st.form("login_form"):
-        u_in = st.text_input("👤 اسم المستخدم:")
-        p_in = st.text_input("🔑 كلمة المرور:", type="password")
-        if st.form_submit_button("تسجيل الدخول 🚀"):
-            if u_in.strip() in USER_CREDENTIALS and USER_CREDENTIALS[u_in.strip()] == p_in.strip():
-                st.session_state['logged_in'] = True
-                st.session_state['username'] = u_in.strip()
-                st.rerun()
-            else: 
-                st.error("❌ بيانات الدخول غير صحيحة.")
-    st.stop()
-
-# -----------------------------------------------------------------------------
-# 5. واجهة التطبيق الرئيسية (تبويبات)
-# -----------------------------------------------------------------------------
-st.markdown(f"<p style='text-align: left; color: gray;'>المستخدم: <b>{st.session_state['username']}</b> | <a href='#' onclick='window.location.reload()'>تسجيل الخروج</a></p>", unsafe_allow_html=True)
-
 tab1, tab2 = st.tabs(["🔎 إجراء مقارنة ذكية (يدعم PDF و Word)", "📜 الأرشيف التاريخي"])
 
 with tab1:
     st.markdown("<h3 style='text-align: right;'>لوحة المطابقة الرقمية التلقائية</h3>", unsafe_allow_html=True)
-    st.info("💡 يمكنك الآن رفع ملفات الـ PDF مباشرة! سيقوم النظام بتحويلها سحابياً ومطابقتها فوراً في خطوة واحدة.")
+    st.info("💡 يمكنك رفع ملفات الـ PDF أو Word مباشرة! سيقوم النظام بالمطابقة فوراً.")
     
     col1, col2 = st.columns(2)
-    # دعم صيغتين PDF و DOCX
     with col1: new_file = st.file_uploader("الملف الجديد (PDF أو Word)", type=['pdf', 'docx'], key="n_f")
     with col2: old_file = st.file_uploader("الملف القديم (PDF أو Word)", type=['pdf', 'docx'], key="o_f")
 
@@ -232,7 +206,7 @@ with tab1:
                     existing_df = conn.read(worksheet="Sheet1", ttl=0)
                     new_row = pd.DataFrame([{
                         "التاريخ": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        "الوكيل / المستخدم": st.session_state['username'],
+                        "الوكيل / المستخدم": "مستخدم (بدون تسجيل)",
                         "اسم الملف المفحوص": st.session_state['c_filename'],
                         "حركة الكلية (عائلات)": cnt['total_fam'],
                         "صافي الأفراد (كلية)": cnt['net_total'],
