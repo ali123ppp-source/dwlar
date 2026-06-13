@@ -5,6 +5,8 @@ from io import BytesIO
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 import pdfplumber
+import arabic_reshaper
+from bidi.algorithm import get_display
 from streamlit_gsheets import GSheetsConnection
 
 # -----------------------------------------------------------------------------
@@ -32,6 +34,18 @@ except Exception:
 # -----------------------------------------------------------------------------
 # 3. محركات المعالجة (قراءة البيانات من PDF و Word مباشرة وبدون تحويل)
 # -----------------------------------------------------------------------------
+def fix_arabic_text(text):
+    """دالة لعدل الحروف العربية المقلوبة من الـ PDF"""
+    if not text:
+        return text
+    # التحقق مما إذا كان النص يحتوي على حروف عربية
+    if any('\u0600' <= char <= '\u06FF' for char in text):
+        # شبك الحروف
+        reshaped_text = arabic_reshaper.reshape(text)
+        # تعديل اتجاه القراءة
+        return get_display(reshaped_text)
+    return text
+
 def parse_row(cells):
     """دالة تحليل ذكية لاستخراج البيانات من الصفوف"""
     if not any(cells) or "المركز" in "".join(cells) or "الوكيل" in "".join(cells) or "اسم رب" in "".join(cells): 
@@ -78,10 +92,14 @@ def extract_clean_records(file_obj, is_pdf=False):
                 tables = page.extract_tables()
                 for table in tables:
                     for row in table:
-                        # تحويل الخانات الفارغة لتجنب الأخطاء
-                        cells = [str(c).strip().replace('\n', ' ') if c is not None else "" for c in row]
+                        # تنظيف الخانات وتعديل اللغة العربية فوراً
+                        cells = []
+                        for c in row:
+                            raw_text = str(c).strip().replace('\n', ' ') if c is not None else ""
+                            cells.append(fix_arabic_text(raw_text))
                         records.update(parse_row(cells))
     else:
+        # الوورد يقرأ العربية بشكل طبيعي ولا يحتاج لتعديل
         doc = Document(file_obj)
         for table in doc.tables:
             for row in table.rows:
