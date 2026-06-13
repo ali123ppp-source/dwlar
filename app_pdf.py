@@ -2,14 +2,16 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from io import BytesIO
+import tempfile
+import os
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-import pdfplumber
+from pdf2docx import Converter
 import unicodedata
 from streamlit_gsheets import GSheetsConnection
 
 # -----------------------------------------------------------------------------
-# 1. إعدادات النظام والمظهر
+# 1. إعدادات النظام
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="نظام المقارنة السحابي المطور", layout="wide", initial_sidebar_state="collapsed")
 
@@ -22,55 +24,32 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
-# 2. إنشاء الاتصال بجوجل شيت 
-# -----------------------------------------------------------------------------
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception:
     pass
 
 # -----------------------------------------------------------------------------
-# 3. محركات المعالجة الذكية (قراءة البيانات من PDF و Word مباشرة)
+# 2. محركات المعالجة الذكية والتحويل التلقائي
 # -----------------------------------------------------------------------------
 def fix_arabic_text(text):
-    """خوارزمية ذكية لقلب الحروف وإعادتها لطبيعتها بدون مكتبات خارجية معقدة"""
-    if not text:
-        return text
-        
-    # 1. تنظيف النص من أي أشكال ملتصقة أو رموز PDF معقدة وإعادتها لحروف عربية صافية
+    if not text: return text
     text = unicodedata.normalize('NFKC', text)
-    
-    # 2. فحص ما إذا كان النص يحتوي على حروف عربية (لأن الـ PDF يقرأها بالمقلوب)
     if any('\u0600' <= char <= '\u06FF' for char in text):
-        words = text.split() # تقسيم الاسم إلى كلمات
-        fixed_words = []
-        
-        for word in words:
-            # إذا كانت الكلمة عربية، نقلبها (مثلاً: ديمح -> حميد)
-            if any('\u0600' <= char <= '\u06FF' for char in word):
-                fixed_words.append(word[::-1])
-            else:
-                # الأرقام أو الكلمات الأجنبية تبقى كما هي
-                fixed_words.append(word)
-                
-        # إعادة تجميع الكلمات بترتيب عكسي لتصحيح مسار الجملة بالكامل
+        words = text.split()
+        fixed_words = [word[::-1] if any('\u0600' <= c <= '\u06FF' for c in word) else word for word in words]
         return " ".join(fixed_words[::-1])
-        
     return text
 
-def parse_row(cells, is_pdf=False):
-    """دالة تحليل ذكية تفهم ترتيب الأعمدة العشوائي في الـ PDF والوورد"""
+def parse_row(cells, is_original_pdf=False):
     clean_cells = [str(c).strip().replace('\n', ' ') if c is not None else "" for c in cells]
     joined = "".join(clean_cells)
     
-    # تجاهل العناوين والصفوف الفارغة
     if not any(clean_cells) or "المركز" in joined or "الوكيل" in joined or "اسم" in joined or "زكرمل" in joined: 
         return {}
         
     name_idx = -1
     max_len = 0
-    # 1. البحث عن عمود الاسم
     for i, c in enumerate(clean_cells):
         if any('\u0600' <= char <= '\u06FF' for char in c) and not any(char.isdigit() for char in c):
             if len(c) > max_len: 
@@ -79,74 +58,77 @@ def parse_row(cells, is_pdf=False):
                 
     if name_idx == -1: return {}
     
-    # تعديل الاسم العربي المقلوب
     raw_name = clean_cells[name_idx]
-    final_name = fix_arabic_text(raw_name) if is_pdf else raw_name
+    # تطبيق التعديل فقط إذا كان الملف الأصلي PDF (لأن التحويل الداخلي قد ينقل الحروف مقلوبة)
+    final_name = fix_arabic_text(raw_name) if is_original_pdf else raw_name
 
-    # 2. البحث عن رقم البطاقة (رقم طويل يتكون من 5 خانات أو أكثر)
     card_num = "-"
     card_cands = [c for c in clean_cells if c.isdigit() and len(c) >= 5]
-    if card_cands:
-        card_num = card_cands[0]
-    else:
-        return {}
+    if card_cands: card_num = card_cands[0]
+    else: return {}
 
-    # 3. استخراج الأرقام الصغيرة (الكلية، المستحقة، المحجوبين، والتسلسل)
     small_before = [int(clean_cells[i]) for i in range(name_idx) if clean_cells[i].isdigit() and len(clean_cells[i]) < 5]
     small_after = [int(clean_cells[i]) for i in range(name_idx + 1, len(clean_cells)) if clean_cells[i].isdigit() and len(clean_cells[i]) < 5]
     
-    seq = "-"
-    total = eligible = withheld = 0
+    seq, total, eligible, withheld = "-", 0, 0, 0
     
-    # 4. توزيع الأرقام بناءً على ترتيب الأعمدة
     if len(small_before) >= 2:
-        if len(small_before) >= 3:
-            withheld, eligible, total = small_before[-3], small_before[-2], small_before[-1]
-        else:
-            withheld, eligible, total = 0, small_before[-2], small_before[-1]
+        if len(small_before) >= 3: withheld, eligible, total = small_before[-3], small_before[-2], small_before[-1]
+        else: withheld, eligible, total = 0, small_before[-2], small_before[-1]
         seq = small_after[0] if small_after else "-"
-        
     elif len(small_after) >= 2:
-        if len(small_after) >= 3:
-            total, eligible, withheld = small_after[0], small_after[1], small_after[2]
-        else:
-            total, eligible, withheld = small_after[0], small_after[1], 0
+        if len(small_after) >= 3: total, eligible, withheld = small_after[0], small_after[1], small_after[2]
+        else: total, eligible, withheld = small_after[0], small_after[1], 0
         seq = small_before[0] if small_before else "-"
-    else:
-        return {}
+    else: return {}
         
     return {card_num: {"seq": seq, "name": final_name, "total": total, "eligible": eligible, "withheld": withheld}}
 
 def extract_clean_records(file_obj, is_pdf=False):
-    """قراءة الجداول مباشرة من الملفات"""
+    """الآن: إذا كان PDF يحوله لوورد في الخلفية، ثم يقرأه كلوورد!"""
     records = {}
+    
     if is_pdf:
-        with pdfplumber.open(file_obj) as pdf:
-            for page in pdf.pages:
-                tables = page.extract_tables()
-                for table in tables:
-                    for row in table:
-                        records.update(parse_row(row, is_pdf=True))
+        # 1. إنشاء ملفات مؤقتة للتحويل الصامت
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+            tmp_pdf.write(file_obj.read())
+            pdf_path = tmp_pdf.name
+            
+        docx_path = pdf_path.replace('.pdf', '.docx')
+        
+        # 2. عملية التحويل الآلية (من PDF إلى Word)
+        cv = Converter(pdf_path)
+        cv.convert(docx_path, start=0, end=None)
+        cv.close()
+        
+        # 3. قراءة الملف الناتج كأنه ملف Word طبيعي
+        doc = Document(docx_path)
+        
+        # 4. تنظيف الخادم ومسح الملفات المؤقتة
+        os.remove(pdf_path)
+        os.remove(docx_path)
     else:
+        # إذا تم رفع Word مباشرة (مثل الملفات التي قمت بتحويلها بـ iLovePDF مسبقاً)
         doc = Document(file_obj)
-        for table in doc.tables:
-            for row in table.rows:
-                cells = [cell.text.strip().replace('\n', ' ') for cell in row.cells]
-                records.update(parse_row(cells, is_pdf=False))
+        
+    # قراءة الجداول (سواء كان Word أصلي أو محول من الـ PDF)
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [cell.text.strip().replace('\n', ' ') for cell in row.cells]
+            records.update(parse_row(cells, is_original_pdf=is_pdf))
+            
     return records
 
 def compare_records(old_data, new_data):
-    results = []
-    counters = {"total_fam": 0, "eligible_fam": 0, "withheld_fam": 0, "added_fam": 0, "deleted_fam": 0, "net_total": 0, "net_eligible": 0, "net_withheld": 0}
+    results, counters = [], {"total_fam": 0, "eligible_fam": 0, "withheld_fam": 0, "added_fam": 0, "deleted_fam": 0, "net_total": 0, "net_eligible": 0, "net_withheld": 0}
     all_cards = set(old_data.keys()).union(set(new_data.keys()))
     for card in all_cards:
         if card in old_data and card in new_data:
             old_v, new_v = old_data[card], new_data[card]
-            diff_total = old_v["total"] != new_v["total"]; diff_elig = old_v["eligible"] != new_v["eligible"]; diff_with = old_v["withheld"] != new_v["withheld"]
-            if diff_total or diff_elig or diff_with:
-                if diff_total: counters["total_fam"] += 1; counters["net_total"] += (new_v["total"] - old_v["total"])
-                if diff_elig: counters["eligible_fam"] += 1; counters["net_eligible"] += (new_v["eligible"] - old_v["eligible"])
-                if diff_with: counters["withheld_fam"] += 1; counters["net_withheld"] += (new_v["withheld"] - old_v["withheld"])
+            if old_v["total"] != new_v["total"] or old_v["eligible"] != new_v["eligible"] or old_v["withheld"] != new_v["withheld"]:
+                if old_v["total"] != new_v["total"]: counters["total_fam"] += 1; counters["net_total"] += (new_v["total"] - old_v["total"])
+                if old_v["eligible"] != new_v["eligible"]: counters["eligible_fam"] += 1; counters["net_eligible"] += (new_v["eligible"] - old_v["eligible"])
+                if old_v["withheld"] != new_v["withheld"]: counters["withheld_fam"] += 1; counters["net_withheld"] += (new_v["withheld"] - old_v["withheld"])
                 results.append({"التسلسل": new_v["seq"], "رقم البطاقة": card, "الاسم (سابقاً)": old_v["name"], "الاسم (حالياً)": new_v["name"], "الكلية (سابقاً)": old_v["total"], "الكلية (حالياً)": new_v["total"], "المستحقة (سابقاً)": old_v["eligible"], "المستحقة (حالياً)": new_v["eligible"], "المحجوبين (سابقاً)": old_v["withheld"], "المحجوبين (حالياً)": new_v["withheld"]})
         elif card in old_data and card not in new_data:
             old_v = old_data[card]
@@ -159,12 +141,8 @@ def compare_records(old_data, new_data):
     return results, counters
 
 def create_word_table_report(df, title):
-    doc = Document()
-    heading = doc.add_heading(title, level=1)
-    heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    cols = list(df.columns)[::-1]
-    table = doc.add_table(rows=1, cols=len(cols))
-    table.style = 'Table Grid'
+    doc = Document(); heading = doc.add_heading(title, level=1); heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    cols = list(df.columns)[::-1]; table = doc.add_table(rows=1, cols=len(cols)); table.style = 'Table Grid'
     for i, col in enumerate(cols): table.rows[0].cells[i].text = str(col)
     for _, row in df.iterrows():
         row_cells = table.add_row().cells
@@ -173,21 +151,21 @@ def create_word_table_report(df, title):
     return buffer
 
 # -----------------------------------------------------------------------------
-# 4. واجهة التطبيق الرئيسية (تبويبات)
+# 3. واجهة التطبيق الرئيسية 
 # -----------------------------------------------------------------------------
-tab1, tab2 = st.tabs(["🔎 إجراء مقارنة ذكية (يدعم PDF و Word)", "📜 الأرشيف التاريخي"])
+tab1, tab2 = st.tabs(["🔎 إجراء مقارنة ذكية", "📜 الأرشيف التاريخي"])
 
 with tab1:
-    st.markdown("<h3 style='text-align: right;'>لوحة المطابقة الرقمية التلقائية</h3>", unsafe_allow_html=True)
-    st.info("💡 يمكنك رفع ملفات الـ PDF أو Word مباشرة! سيقوم النظام بقراءة البيانات من الداخل في لمح البصر.")
+    st.markdown("<h3 style='text-align: right;'>لوحة المطابقة (تحويل آلي مدمج)</h3>", unsafe_allow_html=True)
+    st.info("💡 ارفع ملفات الـ PDF وسيقوم النظام بتحويلها لـ Word بالخلفية فوراً قبل مقارنتها!")
     
     col1, col2 = st.columns(2)
-    with col1: new_file = st.file_uploader("الملف الجديد (PDF أو Word)", type=['pdf', 'docx'], key="n_f")
-    with col2: old_file = st.file_uploader("الملف القديم (PDF أو Word)", type=['pdf', 'docx'], key="o_f")
+    with col1: new_file = st.file_uploader("الملف الجديد", type=['pdf', 'docx'], key="n_f")
+    with col2: old_file = st.file_uploader("الملف القديم", type=['pdf', 'docx'], key="o_f")
 
     if st.button("🚀 تشغيل الفحص والمطابقة"):
         if old_file and new_file:
-            with st.spinner('جاري قراءة البيانات ومطابقتها...'):
+            with st.spinner('جاري التحويل الآلي ومطابقة البيانات...'):
                 try:
                     is_old_pdf = old_file.name.lower().endswith('.pdf')
                     old_data = extract_clean_records(old_file, is_pdf=is_old_pdf)
@@ -198,61 +176,28 @@ with tab1:
                     results, counters = compare_records(old_data, new_data)
                     
                     if results:
-                        df_results = pd.DataFrame(results)[["التسلسل", "رقم البطاقة", "الاسم (سابقاً)", "الاسم (حالياً)", "الكلية (سابقاً)", "الكلية (حالياً)", "المستحقة (سابقاً)", "المستحقة (حالياً)", "المحجوبين (سابقاً)", "المحجوبين (حالياً)"]]
-                        st.session_state['c_results'] = df_results
+                        st.session_state['c_results'] = pd.DataFrame(results)
                         st.session_state['c_counters'] = counters
                         st.session_state['c_filename'] = new_file.name.rsplit('.', 1)[0]
-                        st.success("✅ تمت عملية القراءة والمطابقة بنجاح وفي ثوانٍ!")
-                    else: 
-                        st.info("تطابق كامل بين الملفين، لا توجد فروقات.")
-                except Exception as e:
-                    st.error(f"حدث خطأ أثناء قراءة الملفات: {e}")
+                        st.success("✅ تمت عملية التحويل والقراءة والمطابقة بنجاح!")
+                    else: st.info("تطابق كامل بين الملفين.")
+                except Exception as e: st.error(f"حدث خطأ: {e}")
         else: st.warning("يرجى رفع الملفات أولاً.")
 
     if 'c_results' in st.session_state:
         df_res = st.session_state['c_results']
         cnt = st.session_state['c_counters']
         
-        st.markdown("<h4 style='text-align: right;'>📊 خلاصة المتغيرات الحالية</h4>", unsafe_allow_html=True)
         c1, c2, c3 = st.columns(3)
-        with c1: st.markdown(f"<div class='report-box'>🔹 حركة الكلية<br><h4>{cnt['total_fam']} عائلة</h4>الصافي: {cnt['net_total']:+d}</div>", unsafe_allow_html=True)
-        with c2: st.markdown(f"<div class='report-box'>🔹 حركة المستحقة<br><h4>{cnt['eligible_fam']} عائلة</h4>الصافي: {cnt['net_eligible']:+d}</div>", unsafe_allow_html=True)
-        with c3: st.markdown(f"<div class='report-box'>🔹 الحالات<br><h4>مضاف: {cnt['added_fam']} | محذوف: {cnt['deleted_fam']}</h4></div>", unsafe_allow_html=True)
+        with c1: st.markdown(f"<div class='report-box'>🔹 الكلية: {cnt['net_total']:+d}</div>", unsafe_allow_html=True)
+        with c2: st.markdown(f"<div class='report-box'>🔹 المستحقة: {cnt['net_eligible']:+d}</div>", unsafe_allow_html=True)
+        with c3: st.markdown(f"<div class='report-box'>🔹 مضاف: {cnt['added_fam']} | محذوف: {cnt['deleted_fam']}</div>", unsafe_allow_html=True)
         
-        if st.button("💾 ترحيل وحفظ هذه العملية في أرشيف جوجل شيت السحابي"):
-            with st.spinner("جاري الترحيل للسحابة..."):
-                try:
-                    existing_df = conn.read(worksheet="Sheet1", ttl=0)
-                    new_row = pd.DataFrame([{
-                        "التاريخ": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        "الوكيل / المستخدم": "مستخدم (بدون تسجيل)",
-                        "اسم الملف المفحوص": st.session_state['c_filename'],
-                        "حركة الكلية (عائلات)": cnt['total_fam'],
-                        "صافي الأفراد (كلية)": cnt['net_total'],
-                        "حركة المستحقة (عائلات)": cnt['eligible_fam'],
-                        "صافي الأفراد (مستحقة)": cnt['net_eligible'],
-                        "العائلات المضافة": cnt['added_fam'],
-                        "العائلات المحذوفة": cnt['deleted_fam']
-                    }])
-                    updated_df = pd.concat([existing_df, new_row], ignore_index=True)
-                    conn.update(worksheet="Sheet1", data=updated_df)
-                    st.success("🚀 تم ترحيل البيانات بنجاح إلى أرشيف جوجل شيت!")
-                except Exception as ex:
-                    st.error(f"فشل الاتصال بالشيت، تأكد من إعدادات Secrets: {ex}")
-
         st.dataframe(df_res, use_container_width=True, hide_index=True)
-        
-        st.markdown("---")
-        st.markdown("<h4 style='text-align: right;'>📥 قسم التحميلات</h4>", unsafe_allow_html=True)
-        
-        word_report = create_word_table_report(df_res, f"تقرير - {st.session_state['c_filename']}")
-        st.download_button("📥 تحميل جدول الفروقات كـ Word", data=word_report, file_name=f"تقرير_{st.session_state['c_filename']}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        st.download_button("📥 تحميل التقرير (Word)", data=create_word_table_report(df_res, st.session_state['c_filename']), file_name=f"{st.session_state['c_filename']}.docx")
 
 with tab2:
-    st.markdown("<h3 style='text-align: right;'>📜 العمليات المؤرشفة في جوجل شيت</h3>", unsafe_allow_html=True)
-    if st.button("🔄 تحديث وجلب البيانات الحالية من جوجل شيت"):
+    if st.button("🔄 جلب الأرشيف"):
         try:
-            archive_df = conn.read(worksheet="Sheet1", ttl=0)
-            if not archive_df.empty: st.dataframe(archive_df, use_container_width=True, hide_index=True)
-            else: st.info("الأرشيف فارغ حالياً.")
-        except Exception as ex: st.error(f"لم نتمكن من قراءة الشيت، تأكد من الإعدادات: {ex}")
+            st.dataframe(conn.read(worksheet="Sheet1", ttl=0), use_container_width=True, hide_index=True)
+        except Exception as ex: st.error(ex)
