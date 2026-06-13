@@ -1,14 +1,13 @@
 import streamlit as st
 import pandas as pd
 import os
-import tempfile
+import requests
 from datetime import datetime
 from io import BytesIO
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from streamlit_gsheets import GSheetsConnection
-from pyilovepdf.ilovepdf import ILovePdf
 
 # -----------------------------------------------------------------------------
 # 1. إعدادات النظام والمظهر
@@ -33,35 +32,53 @@ try:
 except Exception:
     pass
 
-ILOVEPDF_PUBLIC_KEY = st.secrets.get("ILOVEPDF_PUBLIC_KEY", "")
 USER_CREDENTIALS = {"agent_hillah": "pass1234", "agent_baghdad": "baghdad2026", "admin": "master_root_99"}
 
 # -----------------------------------------------------------------------------
 # 3. محركات المعالجة والتحويل (PDF -> Word -> Data)
 # -----------------------------------------------------------------------------
 def convert_pdf_to_word_in_memory(pdf_bytes, filename):
-    """دالة لتحويل PDF إلى Word سحابياً وإعادته كملف في الذاكرة"""
-    if not ILOVEPDF_PUBLIC_KEY:
+    """دالة الاتصال المباشر بخوادم iLovePDF بدون استخدام مكتبات خارجية معقدة"""
+    public_key = st.secrets.get("ILOVEPDF_PUBLIC_KEY", "")
+    if not public_key:
         raise Exception("مفتاح iLovePDF غير متوفر في إعدادات Secrets.")
     
-    with tempfile.TemporaryDirectory() as temp_dir:
-        input_pdf_path = os.path.join(temp_dir, filename)
-        with open(input_pdf_path, "wb") as f:
-            f.write(pdf_bytes)
-            
-        ilovepdf = ILovePdf(ILOVEPDF_PUBLIC_KEY, verify_ssl=True)
-        task = ilovepdf.new_task('pdfword')
-        task.add_file(input_pdf_path)
-        task.execute()
-        task.download(temp_dir)
+    try:
+        # 1. المصادقة للحصول على تصريح الدخول (Token)
+        auth_res = requests.post("https://api.ilovepdf.com/v1/auth", data={"public_key": public_key}).json()
+        token = auth_res.get("token")
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # 2. بدء مهمة تحويل جديدة
+        start_res = requests.get("https://api.ilovepdf.com/v1/start/pdfword", headers=headers).json()
+        server = start_res.get("server")
+        task_id = start_res.get("task")
+        
+        # 3. رفع الملف إلى سيرفرهم
+        upload_url = f"https://{server}/v1/upload"
+        files = {"file": (filename, pdf_bytes, "application/pdf")}
+        upload_res = requests.post(upload_url, headers=headers, data={"task": task_id}, files=files).json()
+        server_filename = upload_res.get("server_filename")
+        
+        # 4. إعطاء أمر التحويل
+        process_url = f"https://{server}/v1/process"
+        process_data = {
+            "task": task_id,
+            "tool": "pdfword",
+            "files[0][server_filename]": server_filename,
+            "files[0][filename]": filename
+        }
+        requests.post(process_url, headers=headers, data=process_data)
+        
+        # 5. تحميل الملف الجاهز إلى نظامك
+        download_url = f"https://{server}/v1/download/{task_id}"
+        download_res = requests.get(download_url, headers=headers)
         
         output_docx_name = filename.rsplit('.', 1)[0] + ".docx"
-        output_docx_path = os.path.join(temp_dir, output_docx_name)
+        return BytesIO(download_res.content), output_docx_name
         
-        with open(output_docx_path, "rb") as word_file:
-            docx_data = word_file.read()
-            
-    return BytesIO(docx_data), output_docx_name
+    except Exception as e:
+        raise Exception(f"فشل الاتصال المباشر بـ iLovePDF: {e}")
 
 def extract_clean_records(file_obj):
     doc = Document(file_obj)
@@ -129,17 +146,21 @@ def create_word_table_report(df, title):
 # -----------------------------------------------------------------------------
 # 4. بوابة تسجيل الدخول
 # -----------------------------------------------------------------------------
-if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
+if 'logged_in' not in st.session_state: 
+    st.session_state['logged_in'] = False
 
 if not st.session_state['logged_in']:
-    st.markdown("<h2 style='text-align: right;'>🔐 تسجيل الدخول للنظام السحابي</h2>", unsafe_allow_html=True)
+    st.subheader("🔐 تسجيل الدخول للنظام السحابي")
     with st.form("login_form"):
         u_in = st.text_input("👤 اسم المستخدم:")
         p_in = st.text_input("🔑 كلمة المرور:", type="password")
         if st.form_submit_button("تسجيل الدخول 🚀"):
             if u_in.strip() in USER_CREDENTIALS and USER_CREDENTIALS[u_in.strip()] == p_in.strip():
-                st.session_state['logged_in'] = True; st.session_state['username'] = u_in.strip(); st.rerun()
-            else: st.error("❌ بيانات الدخول غير صحيحة.")
+                st.session_state['logged_in'] = True
+                st.session_state['username'] = u_in.strip()
+                st.rerun()
+            else: 
+                st.error("❌ بيانات الدخول غير صحيحة.")
     st.stop()
 
 # -----------------------------------------------------------------------------
@@ -204,6 +225,28 @@ with tab1:
         with c2: st.markdown(f"<div class='report-box'>🔹 حركة المستحقة<br><h4>{cnt['eligible_fam']} عائلة</h4>الصافي: {cnt['net_eligible']:+d}</div>", unsafe_allow_html=True)
         with c3: st.markdown(f"<div class='report-box'>🔹 الحالات<br><h4>مضاف: {cnt['added_fam']} | محذوف: {cnt['deleted_fam']}</h4></div>", unsafe_allow_html=True)
         
+        # 💾 زر حفظ النتائج في جوجل شيت
+        if st.button("💾 ترحيل وحفظ هذه العملية في أرشيف جوجل شيت السحابي"):
+            with st.spinner("جاري الترحيل للسحابة..."):
+                try:
+                    existing_df = conn.read(worksheet="Sheet1", ttl=0)
+                    new_row = pd.DataFrame([{
+                        "التاريخ": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "الوكيل / المستخدم": st.session_state['username'],
+                        "اسم الملف المفحوص": st.session_state['c_filename'],
+                        "حركة الكلية (عائلات)": cnt['total_fam'],
+                        "صافي الأفراد (كلية)": cnt['net_total'],
+                        "حركة المستحقة (عائلات)": cnt['eligible_fam'],
+                        "صافي الأفراد (مستحقة)": cnt['net_eligible'],
+                        "العائلات المضافة": cnt['added_fam'],
+                        "العائلات المحذوفة": cnt['deleted_fam']
+                    }])
+                    updated_df = pd.concat([existing_df, new_row], ignore_index=True)
+                    conn.update(worksheet="Sheet1", data=updated_df)
+                    st.success("🚀 تم ترحيل البيانات بنجاح إلى أرشيف جوجل شيت!")
+                except Exception as ex:
+                    st.error(f"فشل الاتصال بالشيت، تأكد من إعدادات Secrets: {ex}")
+
         st.dataframe(df_res, use_container_width=True, hide_index=True)
         
         st.markdown("---")
