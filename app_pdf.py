@@ -8,7 +8,9 @@ import glob
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from streamlit_gsheets import GSheetsConnection
-from pyilovepdf import ILovePdf
+import jwt
+import requests
+import time
 
 # -----------------------------------------------------------------------------
 # 1. إعدادات النظام والتصميم
@@ -30,34 +32,50 @@ except Exception:
     pass
 
 # -----------------------------------------------------------------------------
-# 2. محرك الاتصال الرسمي بـ iLovePDF
+# 2. محرك الاتصال بـ iLovePDF API (المباشر والمضمون)
 # -----------------------------------------------------------------------------
 def convert_with_ilovepdf_api(pdf_path, public_key, secret_key, out_dir):
     try:
-        # تهيئة الاتصال باستخدام المكتبة الرسمية
-        ilovepdf = ILovePdf(public_key.strip(), secret_key.strip())
+        # تنظيف المفاتيح من أي مسافات أو أسطر فارغة منسوخة بالخطأ
+        pub_key_clean = public_key.strip()
+        sec_key_clean = secret_key.strip()
+
+        # 1. إنشاء توثيق مشفر (JWT) للاتصال الآمن
+        payload = {"jti": str(time.time()), "iss": pub_key_clean, "iat": int(time.time())}
+        token = jwt.encode(payload, sec_key_clean, algorithm="HS256")
+        headers = {"Authorization": f"Bearer {token}"}
         
-        # إنشاء مهمة تحويل PDF إلى Word
-        task = ilovepdf.new_task('pdfword')
+        # 2. فتح خط اتصال لمهمة (PDF to Word)
+        start_resp = requests.get("https://api.ilovepdf.com/v1/start/pdfword", headers=headers).json()
         
-        # رفع الملف
-        task.add_file(pdf_path)
-        
-        # بدء عملية التحويل
-        task.process()
-        
-        # تحميل ملف الوورد إلى المجلد المؤقت
-        task.download(out_dir)
-        
-        # البحث عن ملف الوورد الناتج
-        docx_files = glob.glob(os.path.join(out_dir, "*.docx"))
-        if docx_files:
-            return docx_files[0]
-        else:
-            raise Exception("تمت المعالجة لكن لم يتم العثور على الملف المحول.")
+        # التأكد من قبول السيرفر للمفاتيح
+        if "server" not in start_resp:
+            error_msg = start_resp.get("error", "مفاتيح غير صالحة")
+            raise Exception(f"رفض السيرفر الاتصال! يرجى التأكد من المفاتيح. (رسالة السيرفر: {error_msg})")
             
+        server, task = start_resp["server"], start_resp["task"]
+        
+        # 3. رفع الملف بسرعة
+        with open(pdf_path, 'rb') as f:
+            upload_resp = requests.post(f"https://{server}/v1/upload", headers=headers, data={'task': task}, files={'file': f}).json()
+            
+        # 4. معالجة التحويل
+        process_data = {
+            "task": task, "tool": "pdfword",
+            "files": [{"server_filename": upload_resp["server_filename"], "filename": "converted.docx"}]
+        }
+        requests.post(f"https://{server}/v1/process", headers=headers, json=process_data)
+        
+        # 5. تنزيل الملف كـ Word
+        download_resp = requests.get(f"https://{server}/v1/download/{task}", headers=headers)
+        docx_path = os.path.join(out_dir, "converted.docx")
+        
+        with open(docx_path, 'wb') as f:
+            f.write(download_resp.content)
+            
+        return docx_path
     except Exception as e:
-        raise Exception(f"خطأ في الاتصال بـ iLovePDF: تأكد من صحة المفاتيح. (التفاصيل: {e})")
+        raise Exception(f"فشل الاتصال بخوادم iLovePDF: {e}")
 
 # -----------------------------------------------------------------------------
 # 3. محركات المعالجة الذكية
@@ -76,7 +94,6 @@ def parse_row(cells):
                 
     if name_idx == -1: return {}
     
-    # الاعتماد على قراءة النص من ملف الوورد المستخرج كما هو
     final_name = clean_cells[name_idx]
 
     card_cands = [c for c in clean_cells if c.isdigit() and len(c) >= 5]
@@ -113,16 +130,15 @@ def extract_clean_records(file_obj, is_pdf, pub_key=None, sec_key=None):
             
         out_dir = tempfile.mkdtemp()
         try:
-            # إرسال الملف للتحويل السريع عبر المكتبة الرسمية
+            # إرسال الملف للتحويل
             docx_path = convert_with_ilovepdf_api(pdf_path, pub_key, sec_key, out_dir)
             doc = Document(docx_path)
         finally:
-            # التنظيف الذكي وحذف الملفات المؤقتة
+            # التنظيف وحذف الملفات المؤقتة
             if os.path.exists(pdf_path): os.remove(pdf_path)
             for f in glob.glob(os.path.join(out_dir, "*")): os.remove(f)
             if os.path.exists(out_dir): os.rmdir(out_dir)
     else:
-        # قراءة ملفات الوورد المرفوعة مباشرة
         doc = Document(file_obj)
         
     for table in doc.tables:
