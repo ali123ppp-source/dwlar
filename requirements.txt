@@ -1,4 +1,6 @@
 streamlit
 pandas
 python-docx
-st-gsheets-connection
+reportlab
+arabic-reshaper
+python-bidi
