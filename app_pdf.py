@@ -106,14 +106,12 @@ def compare_records(old_data, new_data):
     for card in all_cards:
         if card in old_data and card in new_data:
             old_v, new_v = old_data[card], new_data[card]
-            # حالة تعديل في الحصص
             if old_v["total"] != new_v["total"] or old_v["eligible"] != new_v["eligible"] or old_v["withheld"] != new_v["withheld"]:
                 counters["modified_fam"] += 1
                 counters["net_total"] += (new_v["total"] - old_v["total"])
                 counters["net_eligible"] += (new_v["eligible"] - old_v["eligible"])
                 counters["net_withheld"] += (new_v["withheld"] - old_v["withheld"])
                 results.append({"التسلسل": new_v["seq"], "رقم البطاقة": card, "الاسم الرباعي (سابقاً)": old_v["name"], "الاسم الرباعي (حالياً)": new_v["name"], "الكلية (سابقاً)": old_v["total"], "الكلية (حالياً)": new_v["total"], "المستحقة (سابقاً)": old_v["eligible"], "المستحقة (حالياً)": new_v["eligible"], "المحجوبين (سابقاً)": old_v["withheld"], "المحجوبين (حالياً)": new_v["withheld"], "الحالة": "🟡 قيد معدل الحصص"})
-            # حالة التطابق الكامل (بدون تغيير) - تظهر الآن بناءً على طلبك لبيانات الوكيل بالكامل
             else:
                 counters["unchanged_fam"] += 1
                 results.append({"التسلسل": new_v["seq"], "رقم البطاقة": card, "الاسم الرباعي (سابقاً)": old_v["name"], "الاسم الرباعي (حالياً)": new_v["name"], "الكلية (سابقاً)": old_v["total"], "الكلية (حالياً)": new_v["total"], "المستحقة (سابقاً)": old_v["eligible"], "المستحقة (حالياً)": new_v["eligible"], "المحجوبين (سابقاً)": old_v["withheld"], "المحجوبين (حالياً)": new_v["withheld"], "الحالة": "✅ متطابق (بدون تغيير)"})
@@ -140,7 +138,7 @@ def create_current_only_word_report(df, file_title):
     for _, row in df.iterrows():
         quad_name = row["الاسم الرباعي (حالياً)"]
         if "❌" in quad_name:
-            quad_name = row["الاسم الرباعي (سابقاً)"] # إظهار الاسم قبل الحذف للتوثيق
+            quad_name = row["الاسم الرباعي (سابقاً)"]
             
         report_rows.append({
             "التسلسل": row["التسلسل"],
@@ -153,7 +151,6 @@ def create_current_only_word_report(df, file_title):
         })
         
     report_df = pd.DataFrame(report_rows)
-    # ترتيب الجدول وتجهيزه ليدعم اتجاه لغة الـ Word اليمينية RTL
     cols = list(report_df.columns)[::-1]
     table = doc.add_table(rows=1, cols=len(cols))
     table.style = 'Table Grid'
@@ -205,7 +202,6 @@ with tab1:
                     results, counters = compare_records(old_data, new_data)
                     
                     if results:
-                        # الترتيب التلقائي حسب التسلسل لسهولة المراجعة
                         st.session_state['c_results'] = pd.DataFrame(results).sort_values(by="التسلسل")
                         st.session_state['c_counters'] = counters
                         st.session_state['c_filename'] = new_file.name.rsplit('.', 1)[0]
@@ -229,11 +225,17 @@ with tab1:
         df_res = st.session_state['c_results']
         cnt = st.session_state['c_counters']
         
-        # عرض سريع لصافي الفروقات
+        # 🔐 حماية إضافية ضد الـ KeyError في حال قراءة كاش قديم باستخدام .get()
+        net_total = cnt.get('net_total', 0)
+        added_fam = cnt.get('added_fam', 0)
+        deleted_fam = cnt.get('deleted_fam', 0)
+        unchanged_fam = cnt.get('unchanged_fam', 0)
+        modified_fam = cnt.get('modified_fam', 0)
+        
         c1, c2, c3 = st.columns(3)
         with c1: st.markdown(f"<div class='report-box'>🔹 إجمالي سجلات الوكيل: {len(df_res)}</div>", unsafe_allow_html=True)
-        with c2: st.markdown(f"<div class='report-box'>🔹 صافي المستحقة: {cnt['net_total']:+d}</div>", unsafe_allow_html=True)
-        with c3: st.markdown(f"<div class='report-box'>🔹 مضاف: {cnt['added_fam']} | محذوف: {cnt['deleted_fam']} | متطابق: {cnt['unchanged_fam']}</div>", unsafe_allow_html=True)
+        with c2: st.markdown(f"<div class='report-box'>🔹 صافي المستحقة: {net_total:+d}</div>", unsafe_allow_html=True)
+        with c3: st.markdown(f"<div class='report-box'>🔹 مضاف: {added_fam} | محذوف: {deleted_fam} | متطابق: {unchanged_fam}</div>", unsafe_allow_html=True)
         
         st.markdown("### 🔐 ترحيل سحابي دائم")
         if st.button("💾 حفظ بيانات هذا الوكيل بالكامل في Google Sheets"):
@@ -256,20 +258,17 @@ with tab1:
         st.markdown("---")
         st.markdown("<h4 style='text-align: right;'>🎯 لوحة البحث والفرز الذكي بأسماء الوكيل الحالية</h4>", unsafe_allow_html=True)
         
-        # خيارات الفلترة المتقدمة لجميع الحالات المتوفرة
         filter_options = [
             f"📋 عرض كافّة سجلات الوكيل بالكامل ({len(df_res)})",
-            f"✅ العوائل المستقرة والمتطابقة فقط ({cnt['unchanged_fam']})",
-            f"🟡 العوائل التي تغيرت حصصها التموينية ({cnt['modified_fam']})",
-            f"✨ العوائل المضافة حديثاً للوكيل ({cnt['added_fam']})",
-            f"❌ العوائل المحذوفة أو المنقولة من الوكيل ({cnt['deleted_fam']})"
+            f"✅ العوائل المستقرة والمتطابقة فقط ({unchanged_fam})",
+            f"🟡 العوائل التي تغيرت حصصها التموينية ({modified_fam})",
+            f"✨ العوائل المضافة حديثاً للوكيل ({added_fam})",
+            f"❌ العوائل المحذوفة أو المنقولة من الوكيل ({deleted_fam})"
         ]
         selected_filter = st.selectbox("🎯 اختر الفئة المراد تدقيقها للوكيل:", filter_options)
         
-        # 👤 محرك البحث الذكي الفوري بالاسم الرباعي أو رقم البطاقة التموينية
         search_q = st.text_input("👤 اكتب الاسم الرباعي للمواطن أو رقم البطاقة للبحث الفوري:", "")
         
-        # تطبيق الفلاتر
         if "✅" in selected_filter:
             filtered_df = df_res[df_res["الحالة"] == "✅ متطابق (بدون تغيير)"]
         elif "🟡" in selected_filter:
@@ -281,7 +280,6 @@ with tab1:
         else:
             filtered_df = df_res
 
-        # تطبيق البحث الفوري بالاسم الرباعي
         if search_q:
             filtered_df = filtered_df[
                 filtered_df["الاسم الرباعي (حالياً)"].str.contains(search_q, na=False) | 
@@ -291,12 +289,10 @@ with tab1:
             
         st.markdown(f"<p style='text-align: right; color: gray;'>عدد النتائج الحالية: {len(filtered_df)} مواطن</p>", unsafe_allow_html=True)
         
-        # عرض كروت البيانات مع حقل التسلسل بوضوح ممتاز
         for idx, row in filtered_df.iterrows():
             display_name = row["الاسم الرباعي (سابقاً)"] if "❌" in row["الاسم الرباعي (حالياً)"] else row["الاسم الرباعي (حالياً)"]
             status_badge = row["الحالة"]
             
-            # ذكر رقم التسلسل في عنوان الكرت صراحةً
             box_title = f"ت تسلسل: [{row['التسلسل']}] | {status_badge} | {display_name} (رقم البطاقة: {row['رقم البطاقة']})"
             
             with st.expander(box_title):
@@ -315,7 +311,6 @@ with tab1:
                                 "</div>", unsafe_allow_html=True)
         
         st.markdown("---")
-        # تحميل تقرير وورد بالبيانات الحالية فقط (بدون ذكر الحقول السابقة) مع التسلسل والحالة
         word_data = create_current_only_word_report(df_res, st.session_state['c_filename'])
         st.download_button(
             label="📥 تحميل كشف الحصص الحالية للوكيل (Word)", 
