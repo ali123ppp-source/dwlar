@@ -1,113 +1,58 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
 from io import BytesIO
-import tempfile
-import os
-import glob
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from streamlit_gsheets import GSheetsConnection
-import jwt
-import requests
-import time
+import datetime
 
 # -----------------------------------------------------------------------------
-# 1. إعدادات النظام والتصميم
+# 1. إعدادات النظام والتصميم الديناميكي المطور للموبايل
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="نظام المقارنة السحابي المطور", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="نظام المطابقة الذكي المؤمن المستمر", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
     <style>
     th, td { text-align: right !important; dir: rtl !important; }
-    div.stButton > button { background-color: var(--primary-color); color: white; width: 100%; font-weight: bold; border-radius: 8px; border: none; height: 45px; }
-    .report-box { background-color: var(--secondary-background-color); color: var(--text-color); padding: 15px; border-radius: 8px; border-right: 5px solid var(--primary-color); text-align: right; margin-bottom: 15px; box-shadow: 0px 2px 5px rgba(0,0,0,0.05); }
-    .report-box h4 { color: var(--text-color); margin: 5px 0; }
+    div.stButton > button { background-color: #2E7D32; color: white; width: 100%; font-weight: bold; border-radius: 8px; border: none; height: 48px; font-size: 16px; }
+    .report-box { background-color: var(--secondary-background-color); color: var(--text-color); padding: 12px; border-radius: 8px; border-right: 5px solid #2E7D32; text-align: right; margin-bottom: 10px; font-weight: bold; }
+    .instruction-box { background-color: #FFF3E0; color: #E65100; padding: 15px; border-radius: 8px; border-right: 5px solid #EF6C00; text-align: right; margin-bottom: 20px; font-size: 15px; line-height: 1.6; }
+    .ilove-link { color: #E65100 !important; font-weight: bold; text-decoration: underline !important; background-color: #FFE0B2; padding: 3px 8px; border-radius: 4px; }
+    
+    /* تنسيقات كروت العوائل الملونة */
+    .month-card { background-color: var(--background-color); padding: 12px; border-radius: 6px; border: 1px solid #e0e0e0; margin-bottom: 8px; text-align: right; }
+    .badge-total { background-color: #0288D1; color: white; padding: 3px 10px; border-radius: 4px; font-weight: bold; display: inline-block; }
+    .badge-eligible { background-color: #388E3C; color: white; padding: 3px 10px; border-radius: 4px; font-weight: bold; display: inline-block; }
+    .badge-withheld { background-color: #D32F2F; color: white; padding: 3px 10px; border-radius: 4px; font-weight: bold; display: inline-block; }
     </style>
 """, unsafe_allow_html=True)
 
+# الاتصال بقوقل شيت وتأمين التوصيل للأرشيف
+conn = None
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception:
-    pass
+    st.error("⚠️ فشل الاتصال بقاعدة البيانات السحابية (Google Sheets)، تحقق من الإعدادات.")
 
 # -----------------------------------------------------------------------------
-# 2. مفاتيح iLovePDF الثابتة والمحمية
+# 2. محرك الذاكرة المستمرة (لحفظ البيانات من المسح عند التحديث)
 # -----------------------------------------------------------------------------
-ILOVEPDF_PUBLIC_KEY = "project_public_75f6c7c1da4d691f31ccc5fb88fc930e_E5Ka36ebed69263364c32d87466e6ee49be79"
-ILOVEPDF_SECRET_KEY = "secret_key_4a929d6d2a01df607c76146f1962dbbd_BkBfG51d077fc768a97e36a6649fd2ee702bc"
+@st.cache_resource
+def get_persistent_memory():
+    # مستودع سحابي مؤقت خاص بمتصفح المستخدم لعدم فقدان البيانات عند الـ Refresh
+    return {"df": None, "counters": None, "filename": None}
 
-# -----------------------------------------------------------------------------
-# 3. محرك الاتصال المطور بـ iLovePDF API (ذكي ومقاوم للأخطاء)
-# -----------------------------------------------------------------------------
-def convert_with_ilovepdf_api(pdf_path, out_dir):
-    try:
-        pub_key_clean = ILOVEPDF_PUBLIC_KEY.strip()
-        sec_key_clean = ILOVEPDF_SECRET_KEY.strip()
+browser_memory = get_persistent_memory()
 
-        if "ضع_هنا" in pub_key_clean or not pub_key_clean:
-            raise Exception("لم يتم إدخال مفاتيح iLovePDF داخل كود السيرفر بعد.")
-
-        token = None
-        
-        # [خطوة 1] محاولة جلب التوكن مباشرة من سيرفر iLovePDF لضمان تخطي مشاكل الوقت
-        try:
-            auth_resp = requests.post("https://api.ilovepdf.com/v1/auth", json={"public_key": pub_key_clean}, timeout=5)
-            if auth_resp.status_code == 200:
-                token = auth_resp.json().get("token")
-        except Exception:
-            pass
-            
-        # [خطوة 2] حل احتياطي: التوقيع الذاتي المحلي في حال تعذر الاتصال بسيرفر التوثيق (مع إضافة الميقات exp)
-        if not token:
-            current_time = int(time.time())
-            payload = {
-                "iss": pub_key_clean,
-                "iat": current_time,
-                "exp": current_time + 3600  # صلاحية التوكن ساعة واحدة
-            }
-            token = jwt.encode(payload, sec_key_clean, algorithm="HS256")
-            if isinstance(token, bytes):
-                token = token.decode('utf-8')
-
-        headers = {"Authorization": f"Bearer {token}"}
-        
-        # [خطوة 3] فتح اتصال لبدء مهمة تحويل PDF to Word
-        start_resp = requests.get("https://api.ilovepdf.com/v1/start/pdfword", headers=headers).json()
-        
-        # إذا لم يقبل السيرفر الاتصال، نقرأ السبب الحقيقي بدقة ونعرضه للمستخدم
-        if "server" not in start_resp:
-            error_details = start_resp.get("error", {})
-            msg = error_details.get("message", "التوكن مرفوض أو الحساب انتهى رصيده المتاح.")
-            code = error_details.get("code", "غير معروف")
-            raise Exception(f"استجابة iLovePDF: {msg} (كود الخطأ: {code})")
-            
-        server, task = start_resp["server"], start_resp["task"]
-        
-        # [خطوة 4] رفع ملف الـ PDF
-        with open(pdf_path, 'rb') as f:
-            upload_resp = requests.post(f"https://{server}/v1/upload", headers=headers, data={'task': task}, files={'file': f}).json()
-            
-        # [خطوة 5] معالجة التحويل الذكي
-        process_data = {
-            "task": task, "tool": "pdfword",
-            "files": [{"server_filename": upload_resp["server_filename"], "filename": "converted.docx"}]
-        }
-        requests.post(f"https://{server}/v1/process", headers=headers, json=process_data)
-        
-        # [خطوة 6] تنزيل الملف النهائي كـ Word
-        download_resp = requests.get(f"https://{server}/v1/download/{task}", headers=headers)
-        docx_path = os.path.join(out_dir, "converted.docx")
-        
-        with open(docx_path, 'wb') as f:
-            f.write(download_resp.content)
-            
-        return docx_path
-    except Exception as e:
-        raise Exception(f"فشل الاتصال الآمن بخوادم التحويل: {e}")
+# خاصية الاستعادة التلقائية الذكية فور تحديث الصفحة
+if 'c_results' not in st.session_state and browser_memory["df"] is not None:
+    st.session_state['c_results'] = browser_memory["df"]
+    st.session_state['c_counters'] = browser_memory["counters"]
+    st.session_state['c_filename'] = browser_memory["filename"]
+    st.toast("🔄 تم استعادة آخر قراءة للبيانات تلقائياً من ذاكرة المتصفح الحية!", icon="⚡")
 
 # -----------------------------------------------------------------------------
-# 4. محركات المعالجة الذكية للجداول والبيانات
+# 3. محركات المعالجة الذكية لجداول الـ Word
 # -----------------------------------------------------------------------------
 def parse_row(cells):
     clean_cells = [str(c).strip().replace('\n', ' ') if c is not None else "" for c in cells]
@@ -146,42 +91,26 @@ def parse_row(cells):
         
     return {card_num: {"seq": seq, "name": final_name, "total": total, "eligible": eligible, "withheld": withheld}}
 
-def extract_clean_records(file_obj, is_pdf):
+def extract_clean_records(file_obj):
     records = {}
-    
-    if is_pdf:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
-            tmp_pdf.write(file_obj.read())
-            pdf_path = tmp_pdf.name
-            
-        out_dir = tempfile.mkdtemp()
-        try:
-            docx_path = convert_with_ilovepdf_api(pdf_path, out_dir)
-            doc = Document(docx_path)
-        finally:
-            if os.path.exists(pdf_path): os.remove(pdf_path)
-            for f in glob.glob(os.path.join(out_dir, "*")): os.remove(f)
-            if os.path.exists(out_dir): os.rmdir(out_dir)
-    else:
-        doc = Document(file_obj)
-        
+    doc = Document(file_obj)
     for table in doc.tables:
         for row in table.rows:
             cells = [cell.text.strip().replace('\n', ' ') for cell in row.cells]
             records.update(parse_row(cells))
-            
     return records
 
 def compare_records(old_data, new_data):
-    results, counters = [], {"total_fam": 0, "eligible_fam": 0, "withheld_fam": 0, "added_fam": 0, "deleted_fam": 0, "net_total": 0, "net_eligible": 0, "net_withheld": 0}
+    results, counters = [], {"added_fam": 0, "deleted_fam": 0, "net_total": 0, "net_eligible": 0, "net_withheld": 0}
     all_cards = set(old_data.keys()).union(set(new_data.keys()))
+    
     for card in all_cards:
         if card in old_data and card in new_data:
             old_v, new_v = old_data[card], new_data[card]
             if old_v["total"] != new_v["total"] or old_v["eligible"] != new_v["eligible"] or old_v["withheld"] != new_v["withheld"]:
-                if old_v["total"] != new_v["total"]: counters["total_fam"] += 1; counters["net_total"] += (new_v["total"] - old_v["total"])
-                if old_v["eligible"] != new_v["eligible"]: counters["eligible_fam"] += 1; counters["net_eligible"] += (new_v["eligible"] - old_v["eligible"])
-                if old_v["withheld"] != new_v["withheld"]: counters["withheld_fam"] += 1; counters["net_withheld"] += (new_v["withheld"] - old_v["withheld"])
+                counters["net_total"] += (new_v["total"] - old_v["total"])
+                counters["net_eligible"] += (new_v["eligible"] - old_v["eligible"])
+                counters["net_withheld"] += (new_v["withheld"] - old_v["withheld"])
                 results.append({"التسلسل": new_v["seq"], "رقم البطاقة": card, "الاسم (سابقاً)": old_v["name"], "الاسم (حالياً)": new_v["name"], "الكلية (سابقاً)": old_v["total"], "الكلية (حالياً)": new_v["total"], "المستحقة (سابقاً)": old_v["eligible"], "المستحقة (حالياً)": new_v["eligible"], "المحجوبين (سابقاً)": old_v["withheld"], "المحجوبين (حالياً)": new_v["withheld"]})
         elif card in old_data and card not in new_data:
             old_v = old_data[card]
@@ -204,53 +133,183 @@ def create_word_table_report(df, title):
     return buffer
 
 # -----------------------------------------------------------------------------
-# 5. واجهة التطبيق الرئيسية المخصصة للهواتف
+# 4. واجهة التطبيق الرئيسية واللوحات التفاعلية
 # -----------------------------------------------------------------------------
-tab1, tab2 = st.tabs(["🔎 إجراء مقارنة ذكية", "📜 الأرشيف التاريخي"])
+tab1, tab2 = st.tabs(["🔎 مطابقة ملفات Word", "📜 الأرشيف التاريخي"])
 
 with tab1:
-    st.markdown("<h3 style='text-align: right;'>لوحة المطابقة التلقائية الذكية</h3>", unsafe_allow_html=True)
-    st.info("📱 مخصص للهواتف: ارفع الملفات مباشرة (PDF أو Word)، وسيقوم النظام بكل شيء تلقائياً.")
+    st.markdown("<h3 style='text-align: right;'>نظام المطابقة والفرز الإحصائي الذكي (المحمي من التحديث)</h3>", unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div class='instruction-box'>
+        💡 <b>ميزة حماية البيانات نشطة حالياً:</b><br>
+        1. إذا قمت بعمل تحديث (Refresh) للصفحة من الموبايل، <b>لن تفقد البيانات المرفوعة والمطابقة سابقاً</b> بفضل ذاكرة النظام المستمرة.<br>
+        2. لتحويل الملفات أولاً: <a href='https://www.ilovepdf.com/pdf_to_word' target='_blank' class='ilove-link'>الانتقال إلى أداة iLovePDF</a> ثم ارفع الملفات بالأسفل.
+    </div>
+    """, unsafe_allow_html=True)
     
     col1, col2 = st.columns(2)
-    with col1: new_file = st.file_uploader("الملف الجديد (PDF أو Word)", type=['pdf', 'docx'], key="n_f")
-    with col2: old_file = st.file_uploader("الملف القديم (PDF أو Word)", type=['pdf', 'docx'], key="o_f")
+    with col1: new_file = st.file_uploader("الملف الجديد بصيغة (Word)", type=['docx'], key="n_f")
+    with col2: old_file = st.file_uploader("الملف القديم بصيغة (Word)", type=['docx'], key="o_f")
 
-    if st.button("🚀 تشغيل الفحص والمطابقة"):
+    col_btn1, col_btn2 = st.columns([3, 1])
+    with col_btn1:
+        run_match = st.button("🚀 تشغيل المطابقة الآن")
+    with col_btn2:
+        # زر إضافي لمسح الذاكرة وبدء ملفات جديدة كلياً عند الحاجة
+        clear_mem = st.button("🗑️ تفريغ الذاكرة للبدء من جديد")
+        if clear_mem:
+            browser_memory["df"] = None
+            browser_memory["counters"] = None
+            browser_memory["filename"] = None
+            for k in ['c_results', 'c_counters', 'c_filename']:
+                if k in st.session_state: del st.session_state[k]
+            st.rerun()
+
+    if run_match:
         if old_file and new_file:
-            with st.spinner('جاري تحويل الملفات وقراءة الجداول سحابياً... يرجى الانتظار ثوانٍ'):
+            with st.spinner('جاري قراءة الجداول وتحليل الفروقات ديناميكياً...'):
                 try:
-                    old_is_pdf = old_file.name.lower().endswith('.pdf')
-                    old_data = extract_clean_records(old_file, is_pdf=old_is_pdf)
-                    
-                    new_is_pdf = new_file.name.lower().endswith('.pdf')
-                    new_data = extract_clean_records(new_file, is_pdf=new_is_pdf)
-
+                    old_data = extract_clean_records(old_file)
+                    new_data = extract_clean_records(new_file)
                     results, counters = compare_records(old_data, new_data)
                     
                     if results:
+                        # التخزين في الجلسة الحالية
                         st.session_state['c_results'] = pd.DataFrame(results)
                         st.session_state['c_counters'] = counters
                         st.session_state['c_filename'] = new_file.name.rsplit('.', 1)[0]
-                        st.success("✅ تمت المعالجة والمطابقة بنجاح تام!")
-                    else: st.info("تطابق كامل ومثالي بين الملفين.")
-                except Exception as e: st.error(str(e))
-        else: st.warning("يرجى رفع الملفين أولاً للبدء.")
+                        
+                        # قفل البيانات فوراً في الذاكرة المستمرة للمتصفح لمنع مسحها عند التحديث
+                        browser_memory["df"] = st.session_state['c_results']
+                        browser_memory["counters"] = st.session_state['c_counters']
+                        browser_memory["filename"] = st.session_state['c_filename']
+                        
+                        st.success("✅ تمت المطابقة بنجاح! وتم تأمين البيانات في المتصفح تلقائياً ضد التحديث.")
+                    else:
+                        st.info("👍 تطابق كامل ومثالي، لا توجد فروقات بين الملفين.")
+                except Exception as e:
+                    st.error(f"حدث خطأ أثناء قراءة البيانات: {str(e)}")
+        else:
+            st.warning("يرجى رفع الملفين بصيغة Word أولاً للبدء.")
 
+    # -------------------------------------------------------------------------
+    # 5. لوحة الفلاتر والفرز الإحصائي الذكي للموبايل عند توفر البيانات
+    # -------------------------------------------------------------------------
     if 'c_results' in st.session_state:
         df_res = st.session_state['c_results']
         cnt = st.session_state['c_counters']
         
+        # عرض الإحصائيات العامة المباشرة
         c1, c2, c3 = st.columns(3)
-        with c1: st.markdown(f"<div class='report-box'>🔹 الكلية: {cnt['net_total']:+d}</div>", unsafe_allow_html=True)
-        with c2: st.markdown(f"<div class='report-box'>🔹 المستحقة: {cnt['net_eligible']:+d}</div>", unsafe_allow_html=True)
-        with c3: st.markdown(f"<div class='report-box'>🔹 مضاف: {cnt['added_fam']} | محذوف: {cnt['deleted_fam']}</div>", unsafe_allow_html=True)
+        with c1: st.markdown(f"<div class='report-box'>🔹 صافي الكلية: {cnt['net_total']:+d}</div>", unsafe_allow_html=True)
+        with c2: st.markdown(f"<div class='report-box'>🔹 صافي المستحقة: {cnt['net_eligible']:+d}</div>", unsafe_allow_html=True)
+        with c3: st.markdown(f"<div class='report-box'>🔹 المضاف: {cnt['added_fam']} | المحذوف: {cnt['deleted_fam']}</div>", unsafe_allow_html=True)
         
-        st.dataframe(df_res, use_container_width=True, hide_index=True)
-        st.download_button("📥 تحميل التقرير (Word)", data=create_word_table_report(df_res, st.session_state['c_filename']), file_name=f"{st.session_state['c_filename']}.docx")
+        # 🔐 ميزة الحفظ والتأمين السحابي الاختياري للأرشفة الدائمة
+        st.markdown("### 🔐 ترحيل دائم للأرشيف")
+        if st.button("💾 اضغط هنا لحفظ وتأمين هذه البيانات في الأرشيف السحابي فوراً"):
+            if conn is not None:
+                with st.spinner('جاري ترحيل وتأمين البيانات في Google Sheets...'):
+                    try:
+                        try: existing_df = pd.DataFrame(conn.read(worksheet="Sheet1", ttl=0))
+                        except Exception: existing_df = pd.DataFrame()
+                        
+                        df_to_save = df_res.copy()
+                        df_to_save["تاريخ الفحص"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+                        df_to_save["اسم الملف المرجعي"] = st.session_state['c_filename']
+                        
+                        final_archive = pd.concat([existing_df, df_to_save], ignore_index=True)
+                        conn.update(worksheet="Sheet1", data=final_archive)
+                        st.success("🌟 ممتاز! تم قفل وحفظ البيانات داخل قوقل شيت بنجاح تام.")
+                    except Exception as ex:
+                        st.error(f"فشل الاتصال بقوقل شيت أثناء الترحيل: {str(ex)}")
+        
+        st.markdown("---")
+        st.markdown("<h4 style='text-align: right;'>🎯 لوحة الفرز والتدقيق الذكي للمفتشين</h4>", unsafe_allow_html=True)
+        
+        total_all = len(df_res)
+        total_added = len(df_res[df_res["الاسم (سابقاً)"] == "✨ (مضاف حديثاً)"])
+        total_deleted = len(df_res[df_res["الاسم (حالياً)"] == "❌ (محذوف / منقول)"])
+        
+        modified_only = df_res[(df_res["الاسم (سابقاً)"] != "✨ (مضاف حديثاً)") & (df_res["الاسم (حالياً)"] != "❌ (محذوف / منقول)")]
+        total_eligible_changed = len(modified_only[modified_only["المستحقة (سابقاً)"] != modified_only["المستحقة (حالياً)"]])
+        total_withheld_changed = len(modified_only[modified_only["المحجوبين (سابقاً)"] != modified_only["المحجوبين (حالياً)"]])
+        total_quota_changed = len(modified_only[modified_only["الكلية (سابقاً)"] != modified_only["الكلية (حالياً)"]])
+        
+        filter_options = [
+            f"📋 عرض جميع الحالات المتغيرة والمحدثة ({total_all})",
+            f"✨ العوائل المضافة حديثاً فقط ({total_added})",
+            f"❌ العوائل المحذوفة أو المنقولة ({total_deleted})",
+            f"🟢 العوائل التي تغير عدد مستحقيها ({total_eligible_changed})",
+            f"🔴 العوائل التي تغير عدد أفرادها المحجوبين ({total_withheld_changed})",
+            f"🔵 العوائل التي تغيرت حصتها الكلية الإجمالية ({total_quota_changed})"
+        ]
+        
+        selected_filter = st.selectbox("🔍 اختر الفئة المراد تدقيقها من القائمة الإحصائية:", filter_options)
+        search_q = st.text_input("👤 ابحث عن اسم مواطن محدد أو رقم بطاقة داخل الفئة المختارة:", "")
+        
+        if "✨" in selected_filter:
+            filtered_df = df_res[df_res["الاسم (سابقاً)"] == "✨ (مضاف حديثاً)"]
+        elif "❌" in selected_filter:
+            filtered_df = df_res[df_res["الاسم (حالياً)"] == "❌ (محذوف / منقول)"]
+        elif "🟢" in selected_filter:
+            filtered_df = modified_only[modified_only["المستحقة (سابقاً)"] != modified_only["المستحقة (حالياً)"]]
+        elif "🔴" in selected_filter:
+            filtered_df = modified_only[modified_only["المحجوبين (سابقاً)"] != modified_only["المحجوبين (حالياً)"]]
+        elif "🔵" in selected_filter:
+            filtered_df = modified_only[modified_only["الكلية (سابقاً)"] != modified_only["الكلية (حالياً)"]]
+        else:
+            filtered_df = df_res
+
+        if search_q:
+            filtered_df = filtered_df[
+                filtered_df["الاسم (حالياً)"].str.contains(search_q, na=False) | 
+                filtered_df["الاسم (سابقاً)"].str.contains(search_q, na=False) |
+                filtered_df["رقم البطاقة"].str.contains(search_q, na=False)
+            ]
+            
+        st.markdown(f"<p style='text-align: right; color: gray;'>عدد السجلات المطابقة الحالية: {len(filtered_df)} مواطن</p>", unsafe_allow_html=True)
+        
+        for idx, row in filtered_df.iterrows():
+            if "❌" in row["الاسم (حالياً)"]:
+                display_name = row["الاسم (سابقاً)"]
+                status_badge = "🔴 محذوف / منقول"
+            elif "✨" in row["الاسم (سابقاً)"]:
+                display_name = row["الاسم (حالياً)"]
+                status_badge = "🟢 مضاف حديثاً"
+            else:
+                display_name = row["الاسم (حالياً)"]
+                status_badge = "🟡 تم تعديل حصته"
+                
+            box_title = f"{status_badge} | {display_name} (البطاقة: {row['رقم البطاقة']})"
+            
+            with st.expander(box_title):
+                col_old, col_new = st.columns(2)
+                
+                with col_old:
+                    st.markdown("<div class='month-card'><b>📅 بيانات الشهر السابق:</b><br><br>"
+                                f"▪️ الحصة الكلية: {row['الكلية (سابقاً)']}<br>"
+                                f"▪️ الحصة المستحقة: {row['المستحقة (سابقاً)']}<br>"
+                                f"▪️ الأفراد المحجوبين: {row['المحجوبين (سابقاً)']}"
+                                "</div>", unsafe_allow_html=True)
+                                
+                with col_new:
+                    st.markdown("<div class='month-card'><b>🌟 بيانات الشهر الحالي (الملونة):</b><br><br>"
+                                f"▪️ الحصة الكلية: <span class='badge-total'>{row['الكلية (حالياً)']}</span><br><br>"
+                                f"▪️ الحصة المستحقة: <span class='badge-eligible'>{row['المستحقة (حالياً)']}</span><br><br>"
+                                f"▪️ الأفراد المحجوبين: <span class='badge-withheld'>{row['المحجوبين (حالياً)']}</span>"
+                                "</div>", unsafe_allow_html=True)
+        
+        st.markdown("---")
+        st.download_button("📥 تحميل تقرير الفروقات كاملاً بملف (Word)", data=create_word_table_report(df_res, st.session_state['c_filename']), file_name=f"تقرير_فروقات_{st.session_state['c_filename']}.docx")
 
 with tab2:
-    if st.button("🔄 جلب الأرشيف"):
+    if st.button("🔄 جلب الأرشيف وتحديث القائمة"):
         try:
-            st.dataframe(conn.read(worksheet="Sheet1", ttl=0), use_container_width=True, hide_index=True)
-        except Exception as ex: st.error(ex)
+            if conn is not None:
+                st.dataframe(conn.read(worksheet="Sheet1", ttl=0), use_container_width=True, hide_index=True)
+            else:
+                st.error("لا يمكن جلب البيانات، الاتصال السحابي مقطوع.")
+        except Exception as ex: 
+            st.error(ex)
