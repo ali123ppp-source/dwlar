@@ -32,15 +32,24 @@ except Exception:
     pass
 
 # -----------------------------------------------------------------------------
-# 2. محرك الاتصال بـ iLovePDF API (المباشر والمضمون)
+# 2. مفاتيح iLovePDF الثابتة والمحمية (تم إدراج مفاتيحك بنجاح)
 # -----------------------------------------------------------------------------
-def convert_with_ilovepdf_api(pdf_path, public_key, secret_key, out_dir):
-    try:
-        # تنظيف المفاتيح من أي مسافات أو أسطر فارغة منسوخة بالخطأ
-        pub_key_clean = public_key.strip()
-        sec_key_clean = secret_key.strip()
+ILOVEPDF_PUBLIC_KEY = "project_public_75f6c7c1da4d691f31ccc5fb88fc930e_E5Ka36ebed69263364c32d87466e6ee49be79"
+ILOVEPDF_SECRET_KEY = "secret_key_4a929d6d2a01df607c76146f1962dbbd_BkBfG51d077fc768a97e36a6649fd2ee702bc"
 
-        # 1. إنشاء توثيق مشفر (JWT) للاتصال الآمن
+# -----------------------------------------------------------------------------
+# 3. محرك الاتصال بـ iLovePDF API (المباشر والمحمي)
+# -----------------------------------------------------------------------------
+def convert_with_ilovepdf_api(pdf_path, out_dir):
+    try:
+        # تنظيف المفاتيح تلقائياً من أي مسافات إضافية
+        pub_key_clean = ILOVEPDF_PUBLIC_KEY.strip()
+        sec_key_clean = ILOVEPDF_SECRET_KEY.strip()
+
+        if "ضع_هنا" in pub_key_clean or not pub_key_clean:
+            raise Exception("لم يتم إدخال مفاتيح iLovePDF داخل كود السيرفر بعد. يرجى تعديل الملف وضبط المفاتيح أولاً.")
+
+        # 1. إنشاء توثيق مشفر (JWT) للاتصال الآمن متوافق مع الوقت الحالي
         payload = {"jti": str(time.time()), "iss": pub_key_clean, "iat": int(time.time())}
         token = jwt.encode(payload, sec_key_clean, algorithm="HS256")
         headers = {"Authorization": f"Bearer {token}"}
@@ -48,25 +57,26 @@ def convert_with_ilovepdf_api(pdf_path, public_key, secret_key, out_dir):
         # 2. فتح خط اتصال لمهمة (PDF to Word)
         start_resp = requests.get("https://api.ilovepdf.com/v1/start/pdfword", headers=headers).json()
         
-        # التأكد من قبول السيرفر للمفاتيح
+        # التأكد من قبول السيرفر للمفاتيح وصلاحية الحساب
         if "server" not in start_resp:
-            error_msg = start_resp.get("error", "مفاتيح غير صالحة")
-            raise Exception(f"رفض السيرفر الاتصال! يرجى التأكد من المفاتيح. (رسالة السيرفر: {error_msg})")
+            error_msg = start_resp.get("error", {})
+            msg = error_msg.get("message", "مفاتيح غير صالحة أو انتهت الصلاحية التجريبية")
+            raise Exception(f"رفض السيرفر الاتصال! (السبب من iLovePDF: {msg})")
             
         server, task = start_resp["server"], start_resp["task"]
         
-        # 3. رفع الملف بسرعة
+        # 3. رفع ملف الـ PDF بسرعة
         with open(pdf_path, 'rb') as f:
             upload_resp = requests.post(f"https://{server}/v1/upload", headers=headers, data={'task': task}, files={'file': f}).json()
             
-        # 4. معالجة التحويل
+        # 4. معالجة التحويل الذكي داخل السيرفر المخصص
         process_data = {
             "task": task, "tool": "pdfword",
             "files": [{"server_filename": upload_resp["server_filename"], "filename": "converted.docx"}]
         }
         requests.post(f"https://{server}/v1/process", headers=headers, json=process_data)
         
-        # 5. تنزيل الملف كـ Word
+        # 5. تنزيل الملف النهائي كـ Word
         download_resp = requests.get(f"https://{server}/v1/download/{task}", headers=headers)
         docx_path = os.path.join(out_dir, "converted.docx")
         
@@ -75,10 +85,10 @@ def convert_with_ilovepdf_api(pdf_path, public_key, secret_key, out_dir):
             
         return docx_path
     except Exception as e:
-        raise Exception(f"فشل الاتصال بخوادم iLovePDF: {e}")
+        raise Exception(f"فشل الاتصال الآمن بخوادم التحويل: {e}")
 
 # -----------------------------------------------------------------------------
-# 3. محركات المعالجة الذكية
+# 4. محركات المعالجة الذكية للجداول والبيانات
 # -----------------------------------------------------------------------------
 def parse_row(cells):
     clean_cells = [str(c).strip().replace('\n', ' ') if c is not None else "" for c in cells]
@@ -117,24 +127,20 @@ def parse_row(cells):
         
     return {card_num: {"seq": seq, "name": final_name, "total": total, "eligible": eligible, "withheld": withheld}}
 
-def extract_clean_records(file_obj, is_pdf, pub_key=None, sec_key=None):
+def extract_clean_records(file_obj, is_pdf):
     records = {}
     
     if is_pdf:
-        if not pub_key or not sec_key:
-            raise ValueError("يرجى إدخال مفاتيح iLovePDF في القائمة الجانبية أولاً لتحويل ملفات الـ PDF.")
-            
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
             tmp_pdf.write(file_obj.read())
             pdf_path = tmp_pdf.name
             
         out_dir = tempfile.mkdtemp()
         try:
-            # إرسال الملف للتحويل
-            docx_path = convert_with_ilovepdf_api(pdf_path, pub_key, sec_key, out_dir)
+            # التحويل التلقائي عبر الـ API المخفي والمستقر
+            docx_path = convert_with_ilovepdf_api(pdf_path, out_dir)
             doc = Document(docx_path)
         finally:
-            # التنظيف وحذف الملفات المؤقتة
             if os.path.exists(pdf_path): os.remove(pdf_path)
             for f in glob.glob(os.path.join(out_dir, "*")): os.remove(f)
             if os.path.exists(out_dir): os.rmdir(out_dir)
@@ -180,33 +186,27 @@ def create_word_table_report(df, title):
     return buffer
 
 # -----------------------------------------------------------------------------
-# 4. واجهة التطبيق الرئيسية 
+# 5. واجهة التطبيق الرئيسية المخصصة للهواتف
 # -----------------------------------------------------------------------------
-with st.sidebar:
-    st.header("⚙️ إعدادات محرك iLovePDF")
-    st.info("لتفعيل التحويل السريع للـ PDF، يرجى إدخال المفاتيح من حسابك المطور.")
-    i_pub_key = st.text_input("Public Key:", type="password")
-    i_sec_key = st.text_input("Secret Key:", type="password")
-    st.markdown("---")
-
 tab1, tab2 = st.tabs(["🔎 إجراء مقارنة ذكية", "📜 الأرشيف التاريخي"])
 
 with tab1:
-    st.markdown("<h3 style='text-align: right;'>لوحة المطابقة (بمحرك iLovePDF السريع)</h3>", unsafe_allow_html=True)
+    st.markdown("<h3 style='text-align: right;'>لوحة المطابقة التلقائية الذكية</h3>", unsafe_allow_html=True)
+    st.info("📱 مخصص للهواتف: ارفع الملفات مباشرة (PDF أو Word)، وسيقوم النظام بكل شيء تلقائياً.")
     
     col1, col2 = st.columns(2)
-    with col1: new_file = st.file_uploader("الملف الجديد", type=['pdf', 'docx'], key="n_f")
-    with col2: old_file = st.file_uploader("الملف القديم", type=['pdf', 'docx'], key="o_f")
+    with col1: new_file = st.file_uploader("الملف الجديد (PDF أو Word)", type=['pdf', 'docx'], key="n_f")
+    with col2: old_file = st.file_uploader("الملف القديم (PDF أو Word)", type=['pdf', 'docx'], key="o_f")
 
     if st.button("🚀 تشغيل الفحص والمطابقة"):
         if old_file and new_file:
-            with st.spinner('جاري الاتصال بخوادم iLovePDF ومطابقة البيانات...'):
+            with st.spinner('جاري تحويل الملفات وقراءة الجداول سحابياً... يرجى الانتظار ثوانٍ'):
                 try:
                     old_is_pdf = old_file.name.lower().endswith('.pdf')
-                    old_data = extract_clean_records(old_file, is_pdf=old_is_pdf, pub_key=i_pub_key, sec_key=i_sec_key)
+                    old_data = extract_clean_records(old_file, is_pdf=old_is_pdf)
                     
                     new_is_pdf = new_file.name.lower().endswith('.pdf')
-                    new_data = extract_clean_records(new_file, is_pdf=new_is_pdf, pub_key=i_pub_key, sec_key=i_sec_key)
+                    new_data = extract_clean_records(new_file, is_pdf=new_is_pdf)
 
                     results, counters = compare_records(old_data, new_data)
                     
@@ -214,10 +214,10 @@ with tab1:
                         st.session_state['c_results'] = pd.DataFrame(results)
                         st.session_state['c_counters'] = counters
                         st.session_state['c_filename'] = new_file.name.rsplit('.', 1)[0]
-                        st.success("✅ تمت المعالجة بنجاح عبر خوادم iLovePDF!")
-                    else: st.info("تطابق كامل بين الملفين.")
+                        st.success("✅ تمت المعالجة والمطابقة بنجاح تام!")
+                    else: st.info("تطابق كامل ومثالي بين الملفين.")
                 except Exception as e: st.error(str(e))
-        else: st.warning("يرجى رفع الملفات أولاً.")
+        else: st.warning("يرجى رفع الملفين أولاً للبدء.")
 
     if 'c_results' in st.session_state:
         df_res = st.session_state['c_results']
