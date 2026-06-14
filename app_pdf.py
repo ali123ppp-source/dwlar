@@ -32,51 +32,70 @@ except Exception:
     pass
 
 # -----------------------------------------------------------------------------
-# 2. مفاتيح iLovePDF الثابتة والمحمية (تم إدراج مفاتيحك بنجاح)
+# 2. مفاتيح iLovePDF الثابتة والمحمية
 # -----------------------------------------------------------------------------
 ILOVEPDF_PUBLIC_KEY = "project_public_75f6c7c1da4d691f31ccc5fb88fc930e_E5Ka36ebed69263364c32d87466e6ee49be79"
 ILOVEPDF_SECRET_KEY = "secret_key_4a929d6d2a01df607c76146f1962dbbd_BkBfG51d077fc768a97e36a6649fd2ee702bc"
 
 # -----------------------------------------------------------------------------
-# 3. محرك الاتصال بـ iLovePDF API (المباشر والمحمي)
+# 3. محرك الاتصال المطور بـ iLovePDF API (ذكي ومقاوم للأخطاء)
 # -----------------------------------------------------------------------------
 def convert_with_ilovepdf_api(pdf_path, out_dir):
     try:
-        # تنظيف المفاتيح تلقائياً من أي مسافات إضافية
         pub_key_clean = ILOVEPDF_PUBLIC_KEY.strip()
         sec_key_clean = ILOVEPDF_SECRET_KEY.strip()
 
         if "ضع_هنا" in pub_key_clean or not pub_key_clean:
-            raise Exception("لم يتم إدخال مفاتيح iLovePDF داخل كود السيرفر بعد. يرجى تعديل الملف وضبط المفاتيح أولاً.")
+            raise Exception("لم يتم إدخال مفاتيح iLovePDF داخل كود السيرفر بعد.")
 
-        # 1. إنشاء توثيق مشفر (JWT) للاتصال الآمن متوافق مع الوقت الحالي
-        payload = {"jti": str(time.time()), "iss": pub_key_clean, "iat": int(time.time())}
-        token = jwt.encode(payload, sec_key_clean, algorithm="HS256")
+        token = None
+        
+        # [خطوة 1] محاولة جلب التوكن مباشرة من سيرفر iLovePDF لضمان تخطي مشاكل الوقت
+        try:
+            auth_resp = requests.post("https://api.ilovepdf.com/v1/auth", json={"public_key": pub_key_clean}, timeout=5)
+            if auth_resp.status_code == 200:
+                token = auth_resp.json().get("token")
+        except Exception:
+            pass
+            
+        # [خطوة 2] حل احتياطي: التوقيع الذاتي المحلي في حال تعذر الاتصال بسيرفر التوثيق (مع إضافة الميقات exp)
+        if not token:
+            current_time = int(time.time())
+            payload = {
+                "iss": pub_key_clean,
+                "iat": current_time,
+                "exp": current_time + 3600  # صلاحية التوكن ساعة واحدة
+            }
+            token = jwt.encode(payload, sec_key_clean, algorithm="HS256")
+            if isinstance(token, bytes):
+                token = token.decode('utf-8')
+
         headers = {"Authorization": f"Bearer {token}"}
         
-        # 2. فتح خط اتصال لمهمة (PDF to Word)
+        # [خطوة 3] فتح اتصال لبدء مهمة تحويل PDF to Word
         start_resp = requests.get("https://api.ilovepdf.com/v1/start/pdfword", headers=headers).json()
         
-        # التأكد من قبول السيرفر للمفاتيح وصلاحية الحساب
+        # إذا لم يقبل السيرفر الاتصال، نقرأ السبب الحقيقي بدقة ونعرضه للمستخدم
         if "server" not in start_resp:
-            error_msg = start_resp.get("error", {})
-            msg = error_msg.get("message", "مفاتيح غير صالحة أو انتهت الصلاحية التجريبية")
-            raise Exception(f"رفض السيرفر الاتصال! (السبب من iLovePDF: {msg})")
+            error_details = start_resp.get("error", {})
+            msg = error_details.get("message", "التوكن مرفوض أو الحساب انتهى رصيده المتاح.")
+            code = error_details.get("code", "غير معروف")
+            raise Exception(f"استجابة iLovePDF: {msg} (كود الخطأ: {code})")
             
         server, task = start_resp["server"], start_resp["task"]
         
-        # 3. رفع ملف الـ PDF بسرعة
+        # [خطوة 4] رفع ملف الـ PDF
         with open(pdf_path, 'rb') as f:
             upload_resp = requests.post(f"https://{server}/v1/upload", headers=headers, data={'task': task}, files={'file': f}).json()
             
-        # 4. معالجة التحويل الذكي داخل السيرفر المخصص
+        # [خطوة 5] معالجة التحويل الذكي
         process_data = {
             "task": task, "tool": "pdfword",
             "files": [{"server_filename": upload_resp["server_filename"], "filename": "converted.docx"}]
         }
         requests.post(f"https://{server}/v1/process", headers=headers, json=process_data)
         
-        # 5. تنزيل الملف النهائي كـ Word
+        # [خطوة 6] تنزيل الملف النهائي كـ Word
         download_resp = requests.get(f"https://{server}/v1/download/{task}", headers=headers)
         docx_path = os.path.join(out_dir, "converted.docx")
         
@@ -137,7 +156,6 @@ def extract_clean_records(file_obj, is_pdf):
             
         out_dir = tempfile.mkdtemp()
         try:
-            # التحويل التلقائي عبر الـ API المخفي والمستقر
             docx_path = convert_with_ilovepdf_api(pdf_path, out_dir)
             doc = Document(docx_path)
         finally:
