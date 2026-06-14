@@ -30,7 +30,6 @@ except ImportError:
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="نظام المقارنة الشامل للوكلاء", layout="wide")
 
-# رابط iLovePDF
 st.markdown("""
     <div style='background-color: #E8F8F5; padding: 10px; border-radius: 8px; text-align: center; border: 2px solid #1ABC9C; margin-bottom: 20px;'>
         <h4 style='color: #16A085; margin: 0;'>🔗 لتحويل ملفات PDF إلى Word بدقة عالية وبشكل مجاني</h4>
@@ -56,16 +55,13 @@ st.markdown("""
 st.markdown("<h1 style='text-align: right;'>نظام المقارنة الشامل والذكي 📄🔎</h1>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# دالة الاستشعار الذكي للتواريخ من أسفل الملف
+# دالة الاستشعار الذكي للتواريخ (تم تحديثها لقراءة تواريخ الوورد المكتوبة بالإنجليزية)
 # -----------------------------------------------------------------------------
 def extract_document_date(file_obj):
-    """
-    تقوم هذه الدالة بقراءة الملف من الأسفل إلى الأعلى بحثاً عن أول تاريخ يصادفها.
-    """
     doc = Document(file_obj)
     texts = []
     
-    # سحب النصوص من الفقرات والجداول
+    # سحب النصوص
     for p in doc.paragraphs:
         if p.text.strip(): texts.append(p.text.strip())
     for table in doc.tables:
@@ -73,21 +69,34 @@ def extract_document_date(file_obj):
             for cell in row.cells:
                 if cell.text.strip(): texts.append(cell.text.strip())
                 
-    # عكس النصوص للبدء من أسفل الملف
-    texts.reverse()
+    texts.reverse() # البحث من الأسفل للأعلى
     
-    # نمط للبحث عن التواريخ بصيغ متعددة
-    date_pattern = re.compile(r'\b(\d{2,4}[/.-]\d{1,2}[/.-]\d{2,4})\b')
+    # نمط للتواريخ الرقمية العادية (مثل 12/05/2023)
+    date_pattern_num = re.compile(r'\b(\d{2,4}[/.-]\d{1,2}[/.-]\d{2,4})\b')
+    # نمط للتواريخ النصية (مثل Saturday, March 14, 2026)
+    date_pattern_eng = re.compile(r'([A-Za-z]+,\s+[A-Za-z]+\s+\d{1,2},\s+\d{4})')
     
     for t in texts:
-        matches = date_pattern.findall(t)
-        if matches:
-            for match_str in matches:
+        # 1. البحث عن الصيغة الإنجليزية أولاً (مثل ملفك المرفق)
+        matches_eng = date_pattern_eng.findall(t)
+        if matches_eng:
+            for match_str in matches_eng:
+                try:
+                    parsed = datetime.strptime(match_str, '%A, %B %d, %Y')
+                    file_obj.seek(0)
+                    return parsed, match_str
+                except ValueError:
+                    continue
+
+        # 2. البحث عن الصيغة الرقمية
+        matches_num = date_pattern_num.findall(t)
+        if matches_num:
+            for match_str in matches_num:
                 formats = ['%Y/%m/%d', '%d/%m/%Y', '%m/%d/%Y', '%Y-%m-%d', '%d-%m-%Y', '%Y.%m.%d', '%d.%m.%Y']
                 for fmt in formats:
                     try:
                         parsed = datetime.strptime(match_str, fmt)
-                        file_obj.seek(0) # إعادة المؤشر للمكان الطبيعي بعد القراءة
+                        file_obj.seek(0)
                         return parsed, match_str
                     except ValueError:
                         continue
@@ -241,7 +250,7 @@ def compare_records(old_data, new_data):
     return results, counters
 
 # -----------------------------------------------------------------------------
-# منشئ PDF الاحترافي المباشر (توليد داخلي)
+# منشئ PDF الاحترافي
 # -----------------------------------------------------------------------------
 def create_advanced_pdf_report(results, title, counters, new_data):
     buffer = BytesIO()
@@ -300,7 +309,7 @@ def create_advanced_pdf_report(results, title, counters, new_data):
     return buffer
 
 # -----------------------------------------------------------------------------
-# إدارة حالة المتصفح (Session State) لضمان عدم ضياع البيانات
+# إدارة حالة المتصفح (Session State)
 # -----------------------------------------------------------------------------
 if 'app_state' not in st.session_state:
     st.session_state.app_state = None
@@ -361,7 +370,6 @@ if st.session_state.app_state is None:
                 new_data = extract_clean_records(new_file_determined)
                 results, counters = compare_records(old_data, new_data)
                 
-                # حفظ النتائج في المتصفح
                 st.session_state.app_state = {
                     "results": sorted(results, key=lambda x: str(x.get("name", ""))),
                     "counters": counters,
@@ -374,7 +382,7 @@ if st.session_state.app_state is None:
             st.warning("يرجى رفع الملفين أولاً.")
 
 # -----------------------------------------------------------------------------
-# عرض النتائج المحفوظة (الواجهة الديناميكية)
+# عرض النتائج المحفوظة
 # -----------------------------------------------------------------------------
 if st.session_state.app_state is not None:
     state = st.session_state.app_state
@@ -417,7 +425,6 @@ if st.session_state.app_state is not None:
                 <div class='net-diff'>حركة السجلات</div>
             </div>""", unsafe_allow_html=True)
 
-        # الواجهة الديناميكية للأسماء المتغيرة (إكسباندرز)
         st.markdown("<h3 style='text-align: right; color: #2C3E50; margin-top: 20px;'>📋 تفاصيل الأسماء المتغيرة (انقر على الاسم للتوسيع والمقارنة)</h3>", unsafe_allow_html=True)
         
         for r in results:
@@ -458,7 +465,6 @@ if st.session_state.app_state is not None:
                 </table>
                 """, unsafe_allow_html=True)
 
-        # أزرار التحميل للـ PDF
         st.markdown("<hr>", unsafe_allow_html=True)
         col_dl1, col_dl2 = st.columns(2)
         with col_dl1:
