@@ -17,9 +17,8 @@ st.markdown("""
     div.stButton > button { background-color: #2E7D32; color: white; width: 100%; font-weight: bold; border-radius: 8px; border: none; height: 48px; font-size: 16px; }
     .report-box { background-color: var(--secondary-background-color); color: var(--text-color); padding: 12px; border-radius: 8px; border-right: 5px solid #2E7D32; text-align: right; margin-bottom: 10px; font-weight: bold; }
     .instruction-box { background-color: #FFF3E0; color: #E65100; padding: 15px; border-radius: 8px; border-right: 5px solid #EF6C00; text-align: right; margin-bottom: 20px; font-size: 15px; line-height: 1.6; }
-    .ilove-link { color: #E65100 !important; font-weight: bold; text-decoration: underline !important; background-color: #FFE0B2; padding: 3px 8px; border-radius: 4px; }
     
-    /* تنسيقات كروت العوائل الملونة للمفتشين والوكلاء */
+    /* تنسيقات كروت العوائل الملونة للوكلاء */
     .month-card { background-color: var(--background-color); padding: 12px; border-radius: 6px; border: 1px solid #e0e0e0; margin-bottom: 8px; text-align: right; }
     .badge-total { background-color: #0288D1; color: white; padding: 3px 10px; border-radius: 4px; font-weight: bold; display: inline-block; }
     .badge-eligible { background-color: #388E3C; color: white; padding: 3px 10px; border-radius: 4px; font-weight: bold; display: inline-block; }
@@ -27,7 +26,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# الاتصال بقوكول شيت للأرشفة التاريخية
+# الاتصال بقوقل شيت للأرشفة التاريخية
 conn = None
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
@@ -114,7 +113,7 @@ def compare_records(old_data, new_data):
                 results.append({"التسلسل": new_v["seq"], "رقم البطاقة": card, "الاسم الرباعي (سابقاً)": old_v["name"], "الاسم الرباعي (حالياً)": new_v["name"], "الكلية (سابقاً)": old_v["total"], "الكلية (حالياً)": new_v["total"], "المستحقة (سابقاً)": old_v["eligible"], "المستحقة (حالياً)": new_v["eligible"], "المحجوبين (سابقاً)": old_v["withheld"], "المحجوبين (حالياً)": new_v["withheld"], "الحالة": "🟡 قيد معدل الحصص"})
             else:
                 counters["unchanged_fam"] += 1
-                results.append({"التسلسل": new_v["seq"], "رقم البطاقة": card, "الاسم الرباعي (سابقاً)": old_v["name"], "الاسم الرباعي (حالياً)": new_v["name"], "الكلية (سابقاً)": old_v["total"], "الكلية (حالياً)": new_v["total"], "المستحقة (سابقاً)": old_v["eligible"], "المستحقة (حالياً)": new_v["eligible"], "المحجوبين (سابقاً)": old_v["withheld"], "المحجوبين (حالياً)": new_v["withheld"], "الحالة": "✅ متطابق (بدون تغيير)"})
+                results.append({"التسلسل": new_v["seq"], "رقم البطاقة": card, "الاسم الرباعي (سابقاً)": old_v["name"], "الاسم الرباعي (حالياً)": new_v["name"], "الكلية (سابقاً)": old_v["total"], "الكلية (حالياً)": new_v["total"], "المستحقة (سابقاً)": old_v["eligible"], "المستحقة (حالياً)": old_v["eligible"], "المحجوبين (سابقاً)": old_v["withheld"], "المحجوبين (حالياً)": old_v["withheld"], "الحالة": "✅ متطابق (بدون تغيير)"})
         elif card in old_data and card not in new_data:
             old_v = old_data[card]
             counters["deleted_fam"] += 1; counters["net_total"] -= old_v["total"]; counters["net_eligible"] -= old_v["eligible"]; counters["net_withheld"] -= old_v["withheld"]
@@ -127,7 +126,7 @@ def compare_records(old_data, new_data):
     return results, counters
 
 # -----------------------------------------------------------------------------
-# 4. محرك تقرير الـ Word للمتغير الحالي فقط (بدون ذكر حقول السابق) مع التسلسل
+# 4. محرك تقرير الـ Word للمتغير الحالي فقط مع التسلسل
 # -----------------------------------------------------------------------------
 def create_current_only_word_report(df, file_title):
     doc = Document()
@@ -136,18 +135,18 @@ def create_current_only_word_report(df, file_title):
     
     report_rows = []
     for _, row in df.iterrows():
-        quad_name = row["الاسم الرباعي (حالياً)"]
-        if "❌" in quad_name:
-            quad_name = row["الاسم الرباعي (سابقاً)"]
+        quad_name = row.get("الاسم الرباعي (حالياً)", "-")
+        if "❌" in str(quad_name):
+            quad_name = row.get("الاسم الرباعي (سابقاً)", "-")
             
         report_rows.append({
-            "التسلسل": row["التسلسل"],
-            "رقم البطاقة": row["رقم البطاقة"],
+            "التسلسل": row.get("التسلسل", "-"),
+            "رقم البطاقة": row.get("رقم البطاقة", "-"),
             "الاسم الرباعي الحالي": quad_name,
-            "الكلية الحالية": row["الكلية (حالياً)"],
-            "المستحقة الحالية": row["المستحقة (حالياً)"],
-            "المحجوبين حالياً": row["المحجوبين (حالياً)"],
-            "حالة القيد": row["الحالة"]
+            "الكلية الحالية": row.get("الكلية (حالياً)", 0),
+            "المستحقة الحالية": row.get("المستحقة (حالياً)", 0),
+            "المحجوبين حالياً": row.get("المحجوبين (حالياً)", 0),
+            "حالة القيد": row.get("الحالة", "🔹 قيد تمويني")
         })
         
     report_df = pd.DataFrame(report_rows)
@@ -225,7 +224,7 @@ with tab1:
         df_res = st.session_state['c_results']
         cnt = st.session_state['c_counters']
         
-        # 🔐 حماية إضافية ضد الـ KeyError في حال قراءة كاش قديم باستخدام .get()
+        # حماية الـ العدادات ضد كاش الأجيال السابقة
         net_total = cnt.get('net_total', 0)
         added_fam = cnt.get('added_fam', 0)
         deleted_fam = cnt.get('deleted_fam', 0)
@@ -269,45 +268,54 @@ with tab1:
         
         search_q = st.text_input("👤 اكتب الاسم الرباعي للمواطن أو رقم البطاقة للبحث الفوري:", "")
         
-        if "✅" in selected_filter:
+        # 🔐 حماية الفلتر: التأكد من وجود عمود الحالة في الجدول المسترجع لمنع الـ KeyError
+        has_status_col = "الحالة" in df_res.columns
+        
+        if has_status_col and "✅" in selected_filter:
             filtered_df = df_res[df_res["الحالة"] == "✅ متطابق (بدون تغيير)"]
-        elif "🟡" in selected_filter:
+        elif has_status_col and "🟡" in selected_filter:
             filtered_df = df_res[df_res["الحالة"] == "🟡 قيد معدل الحصص"]
-        elif "✨" in selected_filter:
+        elif has_status_col and "✨" in selected_filter:
             filtered_df = df_res[df_res["الحالة"] == "🟢 قيد مضاف جديد"]
-        elif "❌" in selected_filter:
+        elif has_status_col and "❌" in selected_filter:
             filtered_df = df_res[df_res["الحالة"] == "🔴 محذوف من الوجبة"]
         else:
             filtered_df = df_res
 
         if search_q:
             filtered_df = filtered_df[
-                filtered_df["الاسم الرباعي (حالياً)"].str.contains(search_q, na=False) | 
-                filtered_df["الاسم الرباعي (سابقاً)"].str.contains(search_q, na=False) |
-                filtered_df["رقم البطاقة"].str.contains(search_q, na=False)
+                filtered_df["الاسم الرباعي (حالياً)"].astype(str).str.contains(search_q, na=False) | 
+                filtered_df["الاسم الرباعي (سابقاً)"].astype(str).str.contains(search_q, na=False) |
+                filtered_df["رقم البطاقة"].astype(str).str.contains(search_q, na=False)
             ]
             
         st.markdown(f"<p style='text-align: right; color: gray;'>عدد النتائج الحالية: {len(filtered_df)} مواطن</p>", unsafe_allow_html=True)
         
+        # 🔐 حماية حلقة العرض باستخدام الدالة الآمنة .get()
         for idx, row in filtered_df.iterrows():
-            display_name = row["الاسم الرباعي (سابقاً)"] if "❌" in row["الاسم الرباعي (حالياً)"] else row["الاسم الرباعي (حالياً)"]
-            status_badge = row["الحالة"]
+            name_now = str(row.get("الاسم الرباعي (حالياً)", ""))
+            name_old = str(row.get("الاسم الرباعي (سابقاً)", ""))
+            card_num = str(row.get("رقم البطاقة", ""))
+            seq_num = str(row.get("التسلسل", "-"))
             
-            box_title = f"ت تسلسل: [{row['التسلسل']}] | {status_badge} | {display_name} (رقم البطاقة: {row['رقم البطاقة']})"
+            display_name = name_old if "❌" in name_now else name_now
+            status_badge = row.get("الحالة", "🔹 قيد تمويني (يرجى تفريغ الذاكرة القديمة)")
+            
+            box_title = f"ت تسلسل: [{seq_num}] | {status_badge} | {display_name} (رقم البطاقة: {card_num})"
             
             with st.expander(box_title):
                 col_old, col_new = st.columns(2)
                 with col_old:
                     st.markdown("<div class='month-card'><b>📅 السجلات التموينية السابقة:</b><br><br>"
-                                f"▪️ إجمالي الكلية: {row['الكلية (سابقاً)']}<br>"
-                                f"▪️ المستحقة الفعلية: {row['المستحقة (سابقاً)']}<br>"
-                                f"▪️ أفراد الحجب: {row['المحجوبين (سابقاً)']}"
+                                f"▪️ إجمالي الكلية: {row.get('الكلية (سابقاً)', 0)}<br>"
+                                f"▪️ المستحقة الفعلية: {row.get('المستحقة (سابقاً)', 0)}<br>"
+                                f"▪️ أفراد الحجب: {row.get('المحجوبين (سابقاً)', 0)}"
                                 "</div>", unsafe_allow_html=True)
                 with col_new:
                     st.markdown("<div class='month-card'><b>🌟 السجلات التموينية الحالية (النهائية):</b><br><br>"
-                                f"▪️ إجمالي الكلية: <span class='badge-total'>{row['الكلية (حالياً)']}</span><br><br>"
-                                f"▪️ المستحقة الفعلية: <span class='badge-eligible'>{row['المستحقة (حالياً)']}</span><br><br>"
-                                f"▪️ أفراد الحجب: <span class='badge-withheld'>{row['المحجوبين (حالياً)']}</span>"
+                                f"▪️ إجمالي الكلية: <span class='badge-total'>{row.get('الكلية (حالياً)', 0)}</span><br><br>"
+                                f"▪️ المستحقة الفعلية: <span class='badge-eligible'>{row.get('المستحقة (حالياً)', 0)}</span><br><br>"
+                                f"▪️ أفراد الحجب: <span class='badge-withheld'>{row.get('المحجوبين (حالياً)', 0)}</span>"
                                 "</div>", unsafe_allow_html=True)
         
         st.markdown("---")
